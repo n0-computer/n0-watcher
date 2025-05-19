@@ -336,7 +336,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Join<T, W> {
     }
 }
 
-impl<T: Clone + Eq + std::fmt::Debug, W: Watcher<Value = T>> Watcher for Join<T, W> {
+impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
     type Value = Vec<T>;
 
     fn get(&self) -> Result<Self::Value, Disconnected> {
@@ -482,7 +482,7 @@ pub struct Stream<W: Watcher + Unpin> {
 
 impl<W: Watcher + Unpin> n0_future::Stream for Stream<W>
 where
-    W::Value: Unpin + std::fmt::Debug,
+    W::Value: Unpin,
 {
     type Item = W::Value;
 
