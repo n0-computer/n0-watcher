@@ -2,6 +2,13 @@
 name = "n0-watcher"
 version = "0.1.0"
 edition = "2021"
+readme = "README.md"
+description = "async watchable values"
+license = "MIT OR Apache-2.0"
+authors = ["dignifiedquire <me@dignifiedquire.com>", "n0 team"]
+repository = "https://github.com/n0-computer/n0-watcher"
+keywords = ["async", "watcher"]
+
 
 [dependencies]
 derive_more = { version = "1.0.0", features = ["debug"] }

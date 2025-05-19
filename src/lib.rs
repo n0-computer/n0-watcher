@@ -8,9 +8,9 @@
 //! [`Watcher`] is like a [`tokio::sync::broadcast::Receiver`]), except that there's no risk
 //! of the channel filling up, but instead you might miss items.
 //!
-//! This module is meant to be imported like this (if you use all of these things):
+//! This crate is meant to be imported like this (if you use all of these things):
 //! ```ignore
-//! use iroh::watcher::{self, Watchable, Watcher as _};
+//! use n0_watcher::{Watchable, Watcher as _};
 //! ```
 
 #[cfg(not(watcher_loom))]
