@@ -170,7 +170,7 @@ pub trait Watcher: Clone {
     /// # Cancel Safety
     ///
     /// The returned future is cancel-safe.
-    fn updated(&mut self) -> NextFut<Self> {
+    fn updated(&mut self) -> NextFut<'_, Self> {
         NextFut { watcher: self }
     }
 
@@ -184,7 +184,7 @@ pub trait Watcher: Clone {
     /// # Cancel Safety
     ///
     /// The returned future is cancel-safe.
-    fn initialized<T, W>(&mut self) -> InitializedFut<T, W, Self>
+    fn initialized<T, W>(&mut self) -> InitializedFut<'_, T, W, Self>
     where
         W: Nullable<T>,
         Self: Watcher<Value = W>,
