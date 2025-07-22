@@ -14,13 +14,13 @@
 //! # Example
 //!
 //! ```
-//! use n0_watcher::{Watchable, Watcher as _};
 //! use futures_lite::StreamExt;
+//! use n0_watcher::{Watchable, Watcher as _};
 //!
 //! #[tokio::main(flavor = "current_thread", start_paused = true)]
 //! async fn main() {
 //!     let watchable = Watchable::new(None);
-//!     
+//!
 //!     // A task that waits for the watcher to be initialized to Some(value) before printing it
 //!     let mut watcher = watchable.watch();
 //!     tokio::spawn(async move {
