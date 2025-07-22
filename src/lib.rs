@@ -451,16 +451,19 @@ pub struct InitializedFut<'a, T, V: Nullable<T>, W: Watcher<Value = V>> {
 impl<T: Clone + Eq + Unpin, V: Nullable<T>, W: Watcher<Value = V> + Unpin> Future
     for InitializedFut<'_, T, V, W>
 {
-    type Output = Result<T, Disconnected>;
+    type Output = T;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         if let Some(value) = self.as_mut().initial.take() {
-            return Poll::Ready(Ok(value));
+            return Poll::Ready(value);
         }
         loop {
-            let value = ready!(self.as_mut().watcher.poll_updated(cx)?);
+            let Ok(value) = ready!(self.as_mut().watcher.poll_updated(cx)) else {
+                // The value will never be initialized
+                return Poll::Pending;
+            };
             if let Some(value) = value.into_option() {
-                return Poll::Ready(Ok(value));
+                return Poll::Ready(value);
             }
         }
     }
@@ -689,7 +692,7 @@ mod tests {
         watchable.set(Some(1u8)).ok();
 
         let poll = poll_once(&mut initialized).await;
-        assert_eq!(poll.unwrap().unwrap(), 1u8);
+        assert_eq!(poll.unwrap(), 1u8);
     }
 
     #[tokio::test]
@@ -700,7 +703,7 @@ mod tests {
         let mut initialized = watcher.initialized();
 
         let poll = poll_once(&mut initialized).await;
-        assert_eq!(poll.unwrap().unwrap(), 1u8);
+        assert_eq!(poll.unwrap(), 1u8);
     }
 
     #[test]
@@ -721,7 +724,7 @@ mod tests {
 
             thread::yield_now();
 
-            let value: u8 = thread.join().unwrap().unwrap();
+            let value: u8 = thread.join().unwrap();
 
             assert_eq!(value, 42);
         };
