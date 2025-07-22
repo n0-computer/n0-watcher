@@ -408,12 +408,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
     }
 
     fn is_connected(&self) -> bool {
-        for watcher in &self.watchers {
-            if !watcher.is_connected() {
-                return false;
-            }
-        }
-        true
+        self.watchers.iter().all(|w| w.is_connected())
     }
 
     fn poll_updated(
