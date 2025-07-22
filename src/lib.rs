@@ -113,7 +113,7 @@ impl<T: Clone + Eq> Watchable<T> {
     /// Creates a [`Direct`] [`Watcher`], allowing the value to be observed, but not modified.
     pub fn watch(&self) -> Direct<T> {
         Direct {
-            epoch: self.shared.state.read().expect("poisoned").epoch,
+            state: self.shared.state(),
             shared: Arc::downgrade(&self.shared),
         }
     }
@@ -153,9 +153,8 @@ pub trait Watcher: Clone {
     /// not, so we can notify or not notify accordingly.
     type Value: Clone + Eq;
 
-    /// Returns the current state of the underlying value, or errors out with
-    /// [`Disconnected`], if one of the underlying [`Watchable`]s has been dropped.
-    fn get(&self) -> Result<Self::Value, Disconnected>;
+    /// Returns the current state of the underlying value.
+    fn get(&mut self) -> Self::Value;
 
     /// Polls for the next value, or returns [`Disconnected`] if one of the underlying
     /// [`Watchable`]s has been dropped.
@@ -190,10 +189,7 @@ pub trait Watcher: Clone {
         Self: Watcher<Value = W>,
     {
         InitializedFut {
-            initial: match self.get() {
-                Ok(value) => value.into_option().map(Ok),
-                Err(Disconnected) => Some(Err(Disconnected)),
-            },
+            initial: self.get().into_option(),
             watcher: self,
         }
     }
@@ -211,12 +207,12 @@ pub trait Watcher: Clone {
     /// # Cancel Safety
     ///
     /// The returned stream is cancel-safe.
-    fn stream(self) -> Stream<Self>
+    fn stream(mut self) -> Stream<Self>
     where
         Self: Unpin,
     {
         Stream {
-            initial: self.get().ok(),
+            initial: Some(self.get()),
             watcher: self,
         }
     }
@@ -250,11 +246,11 @@ pub trait Watcher: Clone {
     /// The returned watcher will only register updates, when the *mapped* value
     /// observably changes. For this, it needs to store a clone of `T` in the watcher.
     fn map<T: Clone + Eq>(
-        self,
+        mut self,
         map: impl Fn(Self::Value) -> T + Send + Sync + 'static,
     ) -> Result<Map<Self, T>, Disconnected> {
         Ok(Map {
-            current: (map)(self.get()?),
+            current: (map)(self.get()),
             map: Arc::new(map),
             watcher: self,
         })
@@ -272,16 +268,18 @@ pub trait Watcher: Clone {
 /// This type is mainly used via the [`Watcher`] interface.
 #[derive(Debug, Clone)]
 pub struct Direct<T> {
-    epoch: u64,
+    state: State<T>,
     shared: Weak<Shared<T>>,
 }
 
 impl<T: Clone + Eq> Watcher for Direct<T> {
     type Value = T;
 
-    fn get(&self) -> Result<Self::Value, Disconnected> {
-        let shared = self.shared.upgrade().ok_or(Disconnected)?;
-        Ok(shared.get())
+    fn get(&mut self) -> Self::Value {
+        if let Some(shared) = self.shared.upgrade() {
+            self.state = shared.state();
+        }
+        self.state.value.clone()
     }
 
     fn poll_updated(
@@ -291,10 +289,10 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         let Some(shared) = self.shared.upgrade() else {
             return Poll::Ready(Err(Disconnected));
         };
-        match shared.poll_updated(cx, self.epoch) {
+        match shared.poll_updated(cx, self.state.epoch) {
             Poll::Pending => Poll::Pending,
             Poll::Ready((current_epoch, value)) => {
-                self.epoch = current_epoch;
+                self.state.epoch = current_epoch;
                 Poll::Ready(Ok(value))
             }
         }
@@ -304,8 +302,8 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
 impl<S: Watcher, T: Watcher> Watcher for (S, T) {
     type Value = (S::Value, T::Value);
 
-    fn get(&self) -> Result<Self::Value, Disconnected> {
-        Ok((self.0.get()?, self.1.get()?))
+    fn get(&mut self) -> Self::Value {
+        (self.0.get(), self.1.get())
     }
 
     fn poll_updated(
@@ -316,8 +314,8 @@ impl<S: Watcher, T: Watcher> Watcher for (S, T) {
         let poll_1 = self.1.poll_updated(cx)?;
         match (poll_0, poll_1) {
             (Poll::Ready(s), Poll::Ready(t)) => Poll::Ready(Ok((s, t))),
-            (Poll::Ready(s), Poll::Pending) => Poll::Ready(self.1.get().map(move |t| (s, t))),
-            (Poll::Pending, Poll::Ready(t)) => Poll::Ready(self.0.get().map(move |s| (s, t))),
+            (Poll::Ready(s), Poll::Pending) => Poll::Ready(Ok((s, self.1.get()))),
+            (Poll::Pending, Poll::Ready(t)) => Poll::Ready(Ok((self.0.get(), t))),
             (Poll::Pending, Poll::Pending) => Poll::Pending,
         }
     }
@@ -340,13 +338,13 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Join<T, W> {
 impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
     type Value = Vec<T>;
 
-    fn get(&self) -> Result<Self::Value, Disconnected> {
+    fn get(&mut self) -> Self::Value {
         let mut out = Vec::with_capacity(self.watchers.len());
-        for watcher in &self.watchers {
-            out.push(watcher.get()?);
+        for watcher in &mut self.watchers {
+            out.push(watcher.get());
         }
 
-        Ok(out)
+        out
     }
 
     fn poll_updated(
@@ -367,9 +365,9 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
 
         if let Some((j, new_value)) = new_value {
             let mut new = Vec::with_capacity(self.watchers.len());
-            for (i, watcher) in self.watchers.iter().enumerate() {
+            for (i, watcher) in self.watchers.iter_mut().enumerate() {
                 if i != j {
-                    new.push(watcher.get()?);
+                    new.push(watcher.get());
                 } else {
                     new.push(new_value.clone());
                 }
@@ -395,8 +393,8 @@ pub struct Map<W: Watcher, T: Clone + Eq> {
 impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
     type Value = T;
 
-    fn get(&self) -> Result<Self::Value, Disconnected> {
-        Ok((self.map)(self.watcher.get()?))
+    fn get(&mut self) -> Self::Value {
+        (self.map)(self.watcher.get())
     }
 
     fn poll_updated(
@@ -446,7 +444,7 @@ impl<W: Watcher> Future for NextFut<'_, W> {
 /// This Future is cancel-safe.
 #[derive(Debug)]
 pub struct InitializedFut<'a, T, V: Nullable<T>, W: Watcher<Value = V>> {
-    initial: Option<Result<T, Disconnected>>,
+    initial: Option<T>,
     watcher: &'a mut W,
 }
 
@@ -457,7 +455,7 @@ impl<T: Clone + Eq + Unpin, V: Nullable<T>, W: Watcher<Value = V> + Unpin> Futur
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         if let Some(value) = self.as_mut().initial.take() {
-            return Poll::Ready(value);
+            return Poll::Ready(Ok(value));
         }
         loop {
             let value = ready!(self.as_mut().watcher.poll_updated(cx)?);
@@ -517,7 +515,7 @@ struct Shared<T> {
     watchers: Mutex<VecDeque<Waker>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct State<T> {
     value: T,
     epoch: u64,
@@ -536,6 +534,10 @@ impl<T: Clone> Shared<T> {
     /// Returns the value, initialized or not.
     fn get(&self) -> T {
         self.state.read().expect("poisoned").value.clone()
+    }
+
+    fn state(&self) -> State<T> {
+        self.state.read().expect("poisoned").clone()
     }
 
     fn poll_updated(&self, cx: &mut task::Context<'_>, last_epoch: u64) -> Poll<(u64, T)> {
@@ -775,21 +777,21 @@ mod tests {
         let a = Watchable::new(1u8);
         let b = Watchable::new(1u8);
 
-        let ab = Join::new([a.watch(), b.watch()].into_iter());
+        let mut ab = Join::new([a.watch(), b.watch()].into_iter());
 
         let stream = ab.clone().stream();
         let handle = tokio::task::spawn(async move { stream.take(5).collect::<Vec<_>>().await });
 
         // get
-        assert_eq!(ab.get().unwrap(), vec![1, 1]);
+        assert_eq!(ab.get(), vec![1, 1]);
         // set a
         a.set(2u8).unwrap();
         tokio::task::yield_now().await;
-        assert_eq!(ab.get().unwrap(), vec![2, 1]);
+        assert_eq!(ab.get(), vec![2, 1]);
         // set b
         b.set(3u8).unwrap();
         tokio::task::yield_now().await;
-        assert_eq!(ab.get().unwrap(), vec![2, 3]);
+        assert_eq!(ab.get(), vec![2, 3]);
 
         a.set(3u8).unwrap();
         tokio::task::yield_now().await;
