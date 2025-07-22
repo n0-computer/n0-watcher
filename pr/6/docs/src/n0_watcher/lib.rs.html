@@ -808,7 +808,10 @@
 <a href="#807" id="807">807</a>
 <a href="#808" id="808">808</a>
 <a href="#809" id="809">809</a>
-<a href="#810" id="810">810</a></pre></div><pre class="rust"><code><span class="doccomment">//! Watchable values.
+<a href="#810" id="810">810</a>
+<a href="#811" id="811">811</a>
+<a href="#812" id="812">812</a>
+<a href="#813" id="813">813</a></pre></div><pre class="rust"><code><span class="doccomment">//! Watchable values.
 //!
 //! A [`Watchable`] exists to keep track of a value which may change over time.  It allows
 //! observers to be notified of changes to the value.  The aim is to always be aware of the
@@ -1261,16 +1264,19 @@
 <span class="kw">impl</span>&lt;T: Clone + Eq + Unpin, V: Nullable&lt;T&gt;, W: Watcher&lt;Value = V&gt; + Unpin&gt; Future
     <span class="kw">for </span>InitializedFut&lt;<span class="lifetime">'_</span>, T, V, W&gt;
 {
-    <span class="kw">type </span>Output = <span class="prelude-ty">Result</span>&lt;T, Disconnected&gt;;
+    <span class="kw">type </span>Output = T;
 
     <span class="kw">fn </span>poll(<span class="kw-2">mut </span><span class="self">self</span>: Pin&lt;<span class="kw-2">&amp;mut </span><span class="self">Self</span>&gt;, cx: <span class="kw-2">&amp;mut </span>task::Context&lt;<span class="lifetime">'_</span>&gt;) -&gt; Poll&lt;<span class="self">Self</span>::Output&gt; {
         <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = <span class="self">self</span>.as_mut().initial.take() {
-            <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Ok</span>(value));
+            <span class="kw">return </span>Poll::Ready(value);
         }
         <span class="kw">loop </span>{
-            <span class="kw">let </span>value = <span class="macro">ready!</span>(<span class="self">self</span>.as_mut().watcher.poll_updated(cx)<span class="question-mark">?</span>);
+            <span class="kw">let </span><span class="prelude-val">Ok</span>(value) = <span class="macro">ready!</span>(<span class="self">self</span>.as_mut().watcher.poll_updated(cx)) <span class="kw">else </span>{
+                <span class="comment">// The value will never be initialized
+                </span><span class="kw">return </span>Poll::Pending;
+            };
             <span class="kw">if let </span><span class="prelude-val">Some</span>(value) = value.into_option() {
-                <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Ok</span>(value));
+                <span class="kw">return </span>Poll::Ready(value);
             }
         }
     }
@@ -1499,7 +1505,7 @@
         watchable.set(<span class="prelude-val">Some</span>(<span class="number">1u8</span>)).ok();
 
         <span class="kw">let </span>poll = poll_once(<span class="kw-2">&amp;mut </span>initialized).<span class="kw">await</span>;
-        <span class="macro">assert_eq!</span>(poll.unwrap().unwrap(), <span class="number">1u8</span>);
+        <span class="macro">assert_eq!</span>(poll.unwrap(), <span class="number">1u8</span>);
     }
 
     <span class="attr">#[tokio::test]
@@ -1510,7 +1516,7 @@
         <span class="kw">let </span><span class="kw-2">mut </span>initialized = watcher.initialized();
 
         <span class="kw">let </span>poll = poll_once(<span class="kw-2">&amp;mut </span>initialized).<span class="kw">await</span>;
-        <span class="macro">assert_eq!</span>(poll.unwrap().unwrap(), <span class="number">1u8</span>);
+        <span class="macro">assert_eq!</span>(poll.unwrap(), <span class="number">1u8</span>);
     }
 
     <span class="attr">#[test]
@@ -1531,7 +1537,7 @@
 
             thread::yield_now();
 
-            <span class="kw">let </span>value: u8 = thread.join().unwrap().unwrap();
+            <span class="kw">let </span>value: u8 = thread.join().unwrap();
 
             <span class="macro">assert_eq!</span>(value, <span class="number">42</span>);
         };
