@@ -9,7 +9,7 @@ values to catch up and thus be an async operation, or it would require the recei
 to buffer intermediate values until they’ve been “received” on the <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a>s with
 an unlimited buffer size and thus potentially unlimited memory growth.</p>
 <h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>futures_lite::StreamExt;
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>n0_future::StreamExt;
 <span class="kw">use </span>n0_watcher::{Watchable, Watcher <span class="kw">as _</span>};
 
 <span class="attr">#[tokio::main(flavor = <span class="string">"current_thread"</span>, start_paused = <span class="bool-val">true</span>)]
