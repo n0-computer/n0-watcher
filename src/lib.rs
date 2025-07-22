@@ -4,12 +4,55 @@
 //! observers to be notified of changes to the value.  The aim is to always be aware of the
 //! **last** value, not to observe *every* value change.
 //!
-//! The goal is to not block calls to `Watchable::set` nor to accumulate memory with
-//! intermediate update values that are already superceded by newer ones.
+//! The reason for this is ergonomics and predictable resource usage: Requiring every
+//! intermediate value to be observable would mean that either the side that sets new values
+//! using [`Watchable::set`] would need to wait for all "receivers" of these intermediate
+//! values to catch up and thus be an async operation, or it would require the receivers
+//! to buffer intermediate values until they've been "received" on the [`Watcher`]s with
+//! an unlimited buffer size and thus potentially unlimited memory growth.
 //!
-//! This crate is meant to be imported like this (if you use all of these things):
-//! ```ignore
+//! # Example
+//!
+//! ```
 //! use n0_watcher::{Watchable, Watcher as _};
+//! use futures_lite::StreamExt;
+//!
+//! #[tokio::main(flavor = "current_thread", start_paused = true)]
+//! async fn main() {
+//!     let watchable = Watchable::new(None);
+//!     
+//!     // A task that waits for the watcher to be initialized to Some(value) before printing it
+//!     let mut watcher = watchable.watch();
+//!     tokio::spawn(async move {
+//!         let initialized_value = watcher.initialized().await;
+//!         println!("initialized: {initialized_value}");
+//!     });
+//!
+//!     // A task that prints every update to the watcher since the initial one:
+//!     let mut updates = watchable.watch().stream_updates_only();
+//!     tokio::spawn(async move {
+//!         while let Some(update) = updates.next().await {
+//!             println!("update: {update:?}");
+//!         }
+//!     });
+//!
+//!     // A task that prints the current value and then every update it can catch,
+//!     // but it also does something else which makes it very slow to pick up new
+//!     // values, so it'll skip some:
+//!     let mut current_and_updates = watchable.watch().stream();
+//!     tokio::spawn(async move {
+//!         while let Some(update) = current_and_updates.next().await {
+//!             println!("update2: {update:?}");
+//!             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+//!         }
+//!     });
+//!
+//!     for i in 0..20 {
+//!         println!("Setting watchable to {i}");
+//!         watchable.set(Some(i)).ok();
+//!         tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+//!     }
+//! }
 //! ```
 
 #[cfg(not(watcher_loom))]

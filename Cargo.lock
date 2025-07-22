@@ -333,6 +333,7 @@ name = "n0-watcher"
 version = "0.2.0"
 dependencies = [
  "derive_more",
+ "futures-lite",
  "n0-future",
  "rand",
  "snafu",
