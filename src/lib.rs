@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```
-//! use futures_lite::StreamExt;
+//! use n0_future::StreamExt;
 //! use n0_watcher::{Watchable, Watcher as _};
 //!
 //! #[tokio::main(flavor = "current_thread", start_paused = true)]
