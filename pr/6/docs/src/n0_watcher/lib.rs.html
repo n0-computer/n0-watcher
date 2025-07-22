@@ -811,15 +811,44 @@
 <a href="#810" id="810">810</a>
 <a href="#811" id="811">811</a>
 <a href="#812" id="812">812</a>
-<a href="#813" id="813">813</a></pre></div><pre class="rust"><code><span class="doccomment">//! Watchable values.
+<a href="#813" id="813">813</a>
+<a href="#814" id="814">814</a>
+<a href="#815" id="815">815</a>
+<a href="#816" id="816">816</a>
+<a href="#817" id="817">817</a>
+<a href="#818" id="818">818</a>
+<a href="#819" id="819">819</a>
+<a href="#820" id="820">820</a>
+<a href="#821" id="821">821</a>
+<a href="#822" id="822">822</a>
+<a href="#823" id="823">823</a>
+<a href="#824" id="824">824</a>
+<a href="#825" id="825">825</a>
+<a href="#826" id="826">826</a>
+<a href="#827" id="827">827</a>
+<a href="#828" id="828">828</a>
+<a href="#829" id="829">829</a>
+<a href="#830" id="830">830</a>
+<a href="#831" id="831">831</a>
+<a href="#832" id="832">832</a>
+<a href="#833" id="833">833</a>
+<a href="#834" id="834">834</a>
+<a href="#835" id="835">835</a>
+<a href="#836" id="836">836</a>
+<a href="#837" id="837">837</a>
+<a href="#838" id="838">838</a>
+<a href="#839" id="839">839</a>
+<a href="#840" id="840">840</a>
+<a href="#841" id="841">841</a>
+<a href="#842" id="842">842</a>
+<a href="#843" id="843">843</a></pre></div><pre class="rust"><code><span class="doccomment">//! Watchable values.
 //!
 //! A [`Watchable`] exists to keep track of a value which may change over time.  It allows
 //! observers to be notified of changes to the value.  The aim is to always be aware of the
 //! **last** value, not to observe *every* value change.
 //!
-//! In that way, a [`Watchable`] is like a [`tokio::sync::broadcast::Sender`] (and a
-//! [`Watcher`] is like a [`tokio::sync::broadcast::Receiver`]), except that there's no risk
-//! of the channel filling up, but instead you might miss items.
+//! The goal is to not block calls to `Watchable::set` nor to accumulate memory with
+//! intermediate update values that are already superceded by newer ones.
 //!
 //! This crate is meant to be imported like this (if you use all of these things):
 //! ```ignore
@@ -967,7 +996,17 @@
     </span><span class="kw">type </span>Value: Clone + Eq;
 
     <span class="doccomment">/// Returns the current state of the underlying value.
+    ///
+    /// If any of the underlying [`Watchable`] values has been dropped, then this
+    /// might return an outdated value for that watchable, specifically, the latest
+    /// value that was fetched for that watchable, as opposed to the latest value
+    /// that was set on the watchable before it was dropped.
     </span><span class="kw">fn </span>get(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="self">Self</span>::Value;
+
+    <span class="doccomment">/// Whether this watcher is still connected to all of its underlying [`Watchable`]s.
+    ///
+    /// Returns false when any of the underlying watchables has been dropped.
+    </span><span class="kw">fn </span>is_connected(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool;
 
     <span class="doccomment">/// Polls for the next value, or returns [`Disconnected`] if one of the underlying
     /// [`Watchable`]s has been dropped.
@@ -1095,6 +1134,10 @@
         <span class="self">self</span>.state.value.clone()
     }
 
+    <span class="kw">fn </span>is_connected(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.shared.upgrade().is_some()
+    }
+
     <span class="kw">fn </span>poll_updated(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         cx: <span class="kw-2">&amp;mut </span>task::Context&lt;<span class="lifetime">'_</span>&gt;,
@@ -1117,6 +1160,10 @@
 
     <span class="kw">fn </span>get(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="self">Self</span>::Value {
         (<span class="self">self</span>.<span class="number">0</span>.get(), <span class="self">self</span>.<span class="number">1</span>.get())
+    }
+
+    <span class="kw">fn </span>is_connected(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.<span class="number">0</span>.is_connected() &amp;&amp; <span class="self">self</span>.<span class="number">1</span>.is_connected()
     }
 
     <span class="kw">fn </span>poll_updated(
@@ -1159,6 +1206,15 @@
 
         out
     }
+
+    <span class="kw">fn </span>is_connected(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="kw">for </span>watcher <span class="kw">in </span><span class="kw-2">&amp;</span><span class="self">self</span>.watchers {
+            <span class="kw">if </span>!watcher.is_connected() {
+                <span class="kw">return </span><span class="bool-val">false</span>;
+            }
+        }
+        <span class="bool-val">true
+    </span>}
 
     <span class="kw">fn </span>poll_updated(
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
@@ -1208,6 +1264,10 @@
 
     <span class="kw">fn </span>get(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="self">Self</span>::Value {
         (<span class="self">self</span>.map)(<span class="self">self</span>.watcher.get())
+    }
+
+    <span class="kw">fn </span>is_connected(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+        <span class="self">self</span>.watcher.is_connected()
     }
 
     <span class="kw">fn </span>poll_updated(
