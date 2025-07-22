@@ -54,6 +54,23 @@
 //!     }
 //! }
 //! ```
+//!
+//! # Similar but different
+//!
+//! - `async_channel`: This is a multi-producer, multi-consumer channel implementation.
+//!   Only at most one consumer will receive each "produced" value.
+//!   What we want is to have every "produced" value to be "broadcast" to every receiver.
+//! - `tokio::broadcast`: Also a multi-producer, multi-consumer channel implementation.
+//!   This is very similar to this crate (`tokio::broadcast::Sender` is like [`Watchable`]
+//!   and `tokio::broadcast::Receiver` is like [`Watcher`]), but you can't get the latest
+//!   value without `.await`ing on the receiver, and it'll internally store a queue of
+//!   intermediate values.
+//! - [`std::sync::RwLock`]: (wrapped in an [`std::sync::Arc`]) This allows you access
+//!   to the latest values, but might block while it's being set (but that could be short
+//!   enough not to matter for async rust purposes).
+//!   This doesn't allow you to be notified whenever a new value is written.
+//! - The `watchable` crate: We used to use this crate at n0, but we wanted to experience
+//!   with different APIs and needed Wasm support.
 
 #[cfg(not(watcher_loom))]
 use std::sync;
