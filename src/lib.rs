@@ -4,9 +4,8 @@
 //! observers to be notified of changes to the value.  The aim is to always be aware of the
 //! **last** value, not to observe *every* value change.
 //!
-//! In that way, a [`Watchable`] is like a [`tokio::sync::broadcast::Sender`] (and a
-//! [`Watcher`] is like a [`tokio::sync::broadcast::Receiver`]), except that there's no risk
-//! of the channel filling up, but instead you might miss items.
+//! The goal is to not block calls to `Watchable::set` nor to accumulate memory with
+//! intermediate update values that are already superceded by newer ones.
 //!
 //! This crate is meant to be imported like this (if you use all of these things):
 //! ```ignore
@@ -154,7 +153,17 @@ pub trait Watcher: Clone {
     type Value: Clone + Eq;
 
     /// Returns the current state of the underlying value.
+    ///
+    /// If any of the underlying [`Watchable`] values has been dropped, then this
+    /// might return an outdated value for that watchable, specifically, the latest
+    /// value that was fetched for that watchable, as opposed to the latest value
+    /// that was set on the watchable before it was dropped.
     fn get(&mut self) -> Self::Value;
+
+    /// Whether this watcher is still connected to all of its underlying [`Watchable`]s.
+    ///
+    /// Returns false when any of the underlying watchables has been dropped.
+    fn is_connected(&self) -> bool;
 
     /// Polls for the next value, or returns [`Disconnected`] if one of the underlying
     /// [`Watchable`]s has been dropped.
@@ -282,6 +291,10 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         self.state.value.clone()
     }
 
+    fn is_connected(&self) -> bool {
+        self.shared.upgrade().is_some()
+    }
+
     fn poll_updated(
         &mut self,
         cx: &mut task::Context<'_>,
@@ -304,6 +317,10 @@ impl<S: Watcher, T: Watcher> Watcher for (S, T) {
 
     fn get(&mut self) -> Self::Value {
         (self.0.get(), self.1.get())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.0.is_connected() && self.1.is_connected()
     }
 
     fn poll_updated(
@@ -345,6 +362,15 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
         }
 
         out
+    }
+
+    fn is_connected(&self) -> bool {
+        for watcher in &self.watchers {
+            if !watcher.is_connected() {
+                return false;
+            }
+        }
+        true
     }
 
     fn poll_updated(
@@ -395,6 +421,10 @@ impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
 
     fn get(&mut self) -> Self::Value {
         (self.map)(self.watcher.get())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.watcher.is_connected()
     }
 
     fn poll_updated(
