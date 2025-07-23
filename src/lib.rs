@@ -65,13 +65,15 @@
 //!   and `tokio::broadcast::Receiver` is like [`Watcher`]), but you can't get the latest
 //!   value without `.await`ing on the receiver, and it'll internally store a queue of
 //!   intermediate values.
+//! - `tokio::watch`: Also a MPSC channel, and unlike `tokio::broadcast` only retains the
+//!   latest value. That module has pretty much the same purpose as this crate, but doesn't
+//!   implement a poll-based method of getting updates and doesn't implement combinators.
 //! - [`std::sync::RwLock`]: (wrapped in an [`std::sync::Arc`]) This allows you access
 //!   to the latest values, but might block while it's being set (but that could be short
 //!   enough not to matter for async rust purposes).
 //!   This doesn't allow you to be notified whenever a new value is written.
-//! - The `watchable` crate: We used to use this crate at n0, but we wanted to experience
+//! - The `watchable` crate: We used to use this crate at n0, but we wanted to experiment
 //!   with different APIs and needed Wasm support.
-
 #[cfg(not(watcher_loom))]
 use std::sync;
 use std::{
