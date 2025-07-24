@@ -1002,7 +1002,10 @@
 <a href="#1001" id="1001">1001</a>
 <a href="#1002" id="1002">1002</a>
 <a href="#1003" id="1003">1003</a>
-<a href="#1004" id="1004">1004</a></pre></div><pre class="rust"><code><span class="doccomment">//! Watchable values.
+<a href="#1004" id="1004">1004</a>
+<a href="#1005" id="1005">1005</a>
+<a href="#1006" id="1006">1006</a>
+<a href="#1007" id="1007">1007</a></pre></div><pre class="rust"><code><span class="doccomment">//! Watchable values.
 //!
 //! A [`Watchable`] exists to keep track of a value which may change over time.  It allows
 //! observers to be notified of changes to the value.  The aim is to always be aware of the
@@ -1655,7 +1658,7 @@
         {
             <span class="kw">let </span>state = <span class="self">self</span>.state.read().expect(<span class="string">"poisoned"</span>);
 
-            <span class="comment">// We might get suprious wakeups due to e.g. a second-to-last Watchable being dropped.
+            <span class="comment">// We might get spurious wakeups due to e.g. a second-to-last Watchable being dropped.
             // This makes sure we don't accidentally return an update that's not actually an update.
             </span><span class="kw">if </span>last_epoch &lt; state.epoch {
                 <span class="kw">return </span>Poll::Ready(state.clone());
@@ -1984,7 +1987,10 @@
         }
         drop(watchable);
 
-        <span class="kw">let </span>values = task.<span class="kw">await</span>.expect(<span class="string">"task paniced"</span>).expect(<span class="string">"value duplicated"</span>);
+        <span class="kw">let </span>values = task
+            .<span class="kw">await
+            </span>.expect(<span class="string">"task panicked"</span>)
+            .expect(<span class="string">"value duplicated"</span>);
         <span class="macro">assert_eq!</span>(values, <span class="macro">vec!</span>[<span class="number">11</span>, <span class="number">12</span>, <span class="number">13</span>, <span class="number">14</span>, <span class="number">15</span>, <span class="number">16</span>, <span class="number">17</span>, <span class="number">18</span>, <span class="number">19</span>, <span class="number">20</span>, <span class="number">21</span>]);
     }
 
