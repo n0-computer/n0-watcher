@@ -1114,7 +1114,7 @@
     /// or false when all watchers have been dropped or none have been created yet.
     </span><span class="kw">pub fn </span>has_watchers(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
         <span class="comment">// `Watchable`s will increase the strong count
-        // `Direct`s watchers (which all watchers decend from) will increase the weak count
+        // `Direct`s watchers (which all watchers descend from) will increase the weak count
         </span>Arc::weak_count(<span class="kw-2">&amp;</span><span class="self">self</span>.shared) != <span class="number">0
     </span>}
 }
