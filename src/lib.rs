@@ -383,17 +383,11 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         &mut self,
         cx: &mut task::Context<'_>,
     ) -> Poll<Result<Self::Value, Disconnected>> {
-        loop {
-            let Some(shared) = self.shared.upgrade() else {
-                return Poll::Ready(Err(Disconnected));
-            };
-            let current_state = ready!(shared.poll_updated(cx, self.state.epoch));
-            if current_state.epoch == self.state.epoch {
-                continue; // This was a wake up potentially due to `Watchable` being dropped, so try again
-            }
-            self.state = current_state;
-            return Poll::Ready(Ok(self.state.value.clone()));
-        }
+        let Some(shared) = self.shared.upgrade() else {
+            return Poll::Ready(Err(Disconnected));
+        };
+        self.state = ready!(shared.poll_updated(cx, self.state.epoch));
+        Poll::Ready(Ok(self.state.value.clone()))
     }
 }
 
@@ -655,10 +649,12 @@ impl<T: Clone> Shared<T> {
 
     fn poll_updated(&self, cx: &mut task::Context<'_>, last_epoch: u64) -> Poll<State<T>> {
         {
-            let state = self.state.read().expect("poisoned").clone();
+            let state = self.state.read().expect("poisoned");
 
+            // We might get suprious wakeups due to e.g. a second-to-last Watchable being dropped.
+            // This makes sure we don't accidentally return an update that's not actually an update.
             if last_epoch < state.epoch {
-                return Poll::Ready(state);
+                return Poll::Ready(state.clone());
             }
         }
 
@@ -670,11 +666,12 @@ impl<T: Clone> Shared<T> {
         #[cfg(watcher_loom)]
         loom::thread::yield_now();
 
+        // We check for an update again to prevent races between putting in wakers and looking for updates.
         {
-            let state = self.state.read().expect("poisoned").clone();
+            let state = self.state.read().expect("poisoned");
 
             if last_epoch < state.epoch {
-                return Poll::Ready(state);
+                return Poll::Ready(state.clone());
             }
         }
 
@@ -949,6 +946,42 @@ mod tests {
         // If this is 2s, then the watchable dropping didn't wake up the `Watcher::updated` future.
         assert_eq!(start.elapsed(), Duration::from_secs(1));
         assert!(result.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_update_wakeup_always_a_change() {
+        let watchable = Watchable::new(10);
+        let mut watcher = watchable.watch();
+
+        let task = tokio::spawn(async move {
+            let mut last_value = watcher.get();
+            let mut values = Vec::new();
+            while let Ok(value) = watcher.updated().await {
+                values.push(value);
+                if last_value == value {
+                    return Err("value duplicated");
+                }
+                last_value = value;
+            }
+            Ok(values)
+        });
+
+        // wait for the task to get set up and polled till pending for once
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        watchable.set(11).ok();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let clone = watchable.clone();
+        drop(clone); // this shouldn't trigger an update
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for i in 1..=10 {
+            watchable.set(i + 11).ok();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        drop(watchable);
+
+        let values = task.await.expect("task paniced").expect("value duplicated");
+        assert_eq!(values, vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
     }
 
     #[test]
