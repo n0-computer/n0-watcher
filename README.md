@@ -9,6 +9,8 @@ observers to be notified of changes to the value.  The aim is to always be aware
 In that way, a `Watchable` is like a `tokio::sync::broadcast::Sender`, except that there's no risk
 of the channel filling up, but instead you might miss items.
 
+See [the module documentation][https://docs.rs/n0-watcher] for more information.
+
 
 ## License
 
