@@ -193,6 +193,20 @@ impl<T: Clone + Eq> Watchable<T> {
     }
 }
 
+impl<T> Drop for Watchable<T> {
+    fn drop(&mut self) {
+        let Ok(mut watchers) = self.shared.watchers.lock() else {
+            return; // Poisoned waking?
+        };
+        // Wake all watchers every time we drop.
+        // This allows us to notify `NextFut::poll`s that the underlying
+        // watchable might be dropped.
+        for watcher in watchers.drain(..) {
+            watcher.wake();
+        }
+    }
+}
+
 /// A handle to a value that's represented by one or more underlying [`Watchable`]s.
 ///
 /// A [`Watcher`] can get the current value, and will be notified when the value changes.
@@ -369,15 +383,16 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         &mut self,
         cx: &mut task::Context<'_>,
     ) -> Poll<Result<Self::Value, Disconnected>> {
-        let Some(shared) = self.shared.upgrade() else {
-            return Poll::Ready(Err(Disconnected));
-        };
-        match shared.poll_updated(cx, self.state.epoch) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(current_state) => {
-                self.state = current_state;
-                Poll::Ready(Ok(self.state.value.clone()))
+        loop {
+            let Some(shared) = self.shared.upgrade() else {
+                return Poll::Ready(Err(Disconnected));
+            };
+            let current_state = ready!(shared.poll_updated(cx, self.state.epoch));
+            if current_state.epoch == self.state.epoch {
+                continue; // This was a wake up potentially due to `Watchable` being dropped, so try again
             }
+            self.state = current_state;
+            return Poll::Ready(Ok(self.state.value.clone()));
         }
     }
 }
@@ -669,11 +684,13 @@ impl<T: Clone> Shared<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
 
     use n0_future::{future::poll_once, StreamExt};
     use rand::{thread_rng, Rng};
-    use tokio::task::JoinSet;
+    use tokio::{
+        task::JoinSet,
+        time::{Duration, Instant},
+    };
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -909,6 +926,29 @@ mod tests {
         assert_eq!(watcher.updated().await.unwrap(), 42);
         drop(watchable);
         assert_eq!(watcher.get(), 42);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_update_wakeup_on_watchable_drop() {
+        let watchable = Watchable::new(10);
+        let mut watcher = watchable.watch();
+
+        let start = Instant::now();
+        let (_, result) = tokio::time::timeout(Duration::from_secs(2), async move {
+            tokio::join!(
+                async move {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    drop(watchable);
+                },
+                async move { watcher.updated().await }
+            )
+        })
+        .await
+        .expect("watcher never updated");
+        // We should've updated 1s after start, since that's when the watchable was dropped.
+        // If this is 2s, then the watchable dropping didn't wake up the `Watcher::updated` future.
+        assert_eq!(start.elapsed(), Duration::from_secs(1));
+        assert!(result.is_err());
     }
 
     #[test]
