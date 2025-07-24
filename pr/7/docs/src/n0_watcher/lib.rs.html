@@ -929,7 +929,47 @@
 <a href="#928" id="928">928</a>
 <a href="#929" id="929">929</a>
 <a href="#930" id="930">930</a>
-<a href="#931" id="931">931</a></pre></div><pre class="rust"><code><span class="doccomment">//! Watchable values.
+<a href="#931" id="931">931</a>
+<a href="#932" id="932">932</a>
+<a href="#933" id="933">933</a>
+<a href="#934" id="934">934</a>
+<a href="#935" id="935">935</a>
+<a href="#936" id="936">936</a>
+<a href="#937" id="937">937</a>
+<a href="#938" id="938">938</a>
+<a href="#939" id="939">939</a>
+<a href="#940" id="940">940</a>
+<a href="#941" id="941">941</a>
+<a href="#942" id="942">942</a>
+<a href="#943" id="943">943</a>
+<a href="#944" id="944">944</a>
+<a href="#945" id="945">945</a>
+<a href="#946" id="946">946</a>
+<a href="#947" id="947">947</a>
+<a href="#948" id="948">948</a>
+<a href="#949" id="949">949</a>
+<a href="#950" id="950">950</a>
+<a href="#951" id="951">951</a>
+<a href="#952" id="952">952</a>
+<a href="#953" id="953">953</a>
+<a href="#954" id="954">954</a>
+<a href="#955" id="955">955</a>
+<a href="#956" id="956">956</a>
+<a href="#957" id="957">957</a>
+<a href="#958" id="958">958</a>
+<a href="#959" id="959">959</a>
+<a href="#960" id="960">960</a>
+<a href="#961" id="961">961</a>
+<a href="#962" id="962">962</a>
+<a href="#963" id="963">963</a>
+<a href="#964" id="964">964</a>
+<a href="#965" id="965">965</a>
+<a href="#966" id="966">966</a>
+<a href="#967" id="967">967</a>
+<a href="#968" id="968">968</a>
+<a href="#969" id="969">969</a>
+<a href="#970" id="970">970</a>
+<a href="#971" id="971">971</a></pre></div><pre class="rust"><code><span class="doccomment">//! Watchable values.
 //!
 //! A [`Watchable`] exists to keep track of a value which may change over time.  It allows
 //! observers to be notified of changes to the value.  The aim is to always be aware of the
@@ -1124,6 +1164,20 @@
     </span>}
 }
 
+<span class="kw">impl</span>&lt;T&gt; Drop <span class="kw">for </span>Watchable&lt;T&gt; {
+    <span class="kw">fn </span>drop(<span class="kw-2">&amp;mut </span><span class="self">self</span>) {
+        <span class="kw">let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>watchers) = <span class="self">self</span>.shared.watchers.lock() <span class="kw">else </span>{
+            <span class="kw">return</span>; <span class="comment">// Poisoned waking?
+        </span>};
+        <span class="comment">// Wake all watchers every time we drop.
+        // This allows us to notify `NextFut::poll`s that the underlying
+        // watchable might be dropped.
+        </span><span class="kw">for </span>watcher <span class="kw">in </span>watchers.drain(..) {
+            watcher.wake();
+        }
+    }
+}
+
 <span class="doccomment">/// A handle to a value that's represented by one or more underlying [`Watchable`]s.
 ///
 /// A [`Watcher`] can get the current value, and will be notified when the value changes.
@@ -1300,15 +1354,16 @@
         <span class="kw-2">&amp;mut </span><span class="self">self</span>,
         cx: <span class="kw-2">&amp;mut </span>task::Context&lt;<span class="lifetime">'_</span>&gt;,
     ) -&gt; Poll&lt;<span class="prelude-ty">Result</span>&lt;<span class="self">Self</span>::Value, Disconnected&gt;&gt; {
-        <span class="kw">let </span><span class="prelude-val">Some</span>(shared) = <span class="self">self</span>.shared.upgrade() <span class="kw">else </span>{
-            <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Err</span>(Disconnected));
-        };
-        <span class="kw">match </span>shared.poll_updated(cx, <span class="self">self</span>.state.epoch) {
-            Poll::Pending =&gt; Poll::Pending,
-            Poll::Ready(current_state) =&gt; {
-                <span class="self">self</span>.state = current_state;
-                Poll::Ready(<span class="prelude-val">Ok</span>(<span class="self">self</span>.state.value.clone()))
-            }
+        <span class="kw">loop </span>{
+            <span class="kw">let </span><span class="prelude-val">Some</span>(shared) = <span class="self">self</span>.shared.upgrade() <span class="kw">else </span>{
+                <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Err</span>(Disconnected));
+            };
+            <span class="kw">let </span>current_state = <span class="macro">ready!</span>(shared.poll_updated(cx, <span class="self">self</span>.state.epoch));
+            <span class="kw">if </span>current_state.epoch == <span class="self">self</span>.state.epoch {
+                <span class="kw">continue</span>; <span class="comment">// This was a wake up potentially due to `Watchable` being dropped, so try again
+            </span>}
+            <span class="self">self</span>.state = current_state;
+            <span class="kw">return </span>Poll::Ready(<span class="prelude-val">Ok</span>(<span class="self">self</span>.state.value.clone()));
         }
     }
 }
@@ -1600,11 +1655,13 @@
 
 <span class="attr">#[cfg(test)]
 </span><span class="kw">mod </span>tests {
-    <span class="kw">use </span>std::time::{Duration, Instant};
 
     <span class="kw">use </span>n0_future::{future::poll_once, StreamExt};
     <span class="kw">use </span>rand::{thread_rng, Rng};
-    <span class="kw">use </span>tokio::task::JoinSet;
+    <span class="kw">use </span>tokio::{
+        task::JoinSet,
+        time::{Duration, Instant},
+    };
     <span class="kw">use </span>tokio_util::sync::CancellationToken;
 
     <span class="kw">use super</span>::<span class="kw-2">*</span>;
@@ -1840,6 +1897,29 @@
         <span class="macro">assert_eq!</span>(watcher.updated().<span class="kw">await</span>.unwrap(), <span class="number">42</span>);
         drop(watchable);
         <span class="macro">assert_eq!</span>(watcher.get(), <span class="number">42</span>);
+    }
+
+    <span class="attr">#[tokio::test(start_paused = <span class="bool-val">true</span>)]
+    </span><span class="kw">async fn </span>test_update_wakeup_on_watchable_drop() {
+        <span class="kw">let </span>watchable = Watchable::new(<span class="number">10</span>);
+        <span class="kw">let </span><span class="kw-2">mut </span>watcher = watchable.watch();
+
+        <span class="kw">let </span>start = Instant::now();
+        <span class="kw">let </span>(<span class="kw">_</span>, result) = tokio::time::timeout(Duration::from_secs(<span class="number">2</span>), <span class="kw">async move </span>{
+            <span class="macro">tokio::join!</span>(
+                <span class="kw">async move </span>{
+                    tokio::time::sleep(Duration::from_secs(<span class="number">1</span>)).<span class="kw">await</span>;
+                    drop(watchable);
+                },
+                <span class="kw">async move </span>{ watcher.updated().<span class="kw">await </span>}
+            )
+        })
+        .<span class="kw">await
+        </span>.expect(<span class="string">"watcher never updated"</span>);
+        <span class="comment">// We should've updated 1s after start, since that's when the watchable was dropped.
+        // If this is 2s, then the watchable dropping didn't wake up the `Watcher::updated` future.
+        </span><span class="macro">assert_eq!</span>(start.elapsed(), Duration::from_secs(<span class="number">1</span>));
+        <span class="macro">assert!</span>(result.is_err());
     }
 
     <span class="attr">#[test]
