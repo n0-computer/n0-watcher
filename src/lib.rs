@@ -183,6 +183,14 @@ impl<T: Clone + Eq> Watchable<T> {
     pub fn get(&self) -> T {
         self.shared.get()
     }
+
+    /// Returns true when there are any watchers actively listening on changes,
+    /// or false when all watchers have been dropped or none have been created yet.
+    pub fn has_watchers(&self) -> bool {
+        // `Watchable`s will increase the strong count
+        // `Direct`s watchers (which all watchers decend from) will increase the weak count
+        Arc::weak_count(&self.shared) != 0
+    }
 }
 
 /// A handle to a value that's represented by one or more underlying [`Watchable`]s.
