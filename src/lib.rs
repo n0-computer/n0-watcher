@@ -188,7 +188,7 @@ impl<T: Clone + Eq> Watchable<T> {
     /// or false when all watchers have been dropped or none have been created yet.
     pub fn has_watchers(&self) -> bool {
         // `Watchable`s will increase the strong count
-        // `Direct`s watchers (which all watchers decend from) will increase the weak count
+        // `Direct`s watchers (which all watchers descend from) will increase the weak count
         Arc::weak_count(&self.shared) != 0
     }
 }
