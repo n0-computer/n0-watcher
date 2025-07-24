@@ -651,7 +651,7 @@ impl<T: Clone> Shared<T> {
         {
             let state = self.state.read().expect("poisoned");
 
-            // We might get suprious wakeups due to e.g. a second-to-last Watchable being dropped.
+            // We might get spurious wakeups due to e.g. a second-to-last Watchable being dropped.
             // This makes sure we don't accidentally return an update that's not actually an update.
             if last_epoch < state.epoch {
                 return Poll::Ready(state.clone());
@@ -980,7 +980,10 @@ mod tests {
         }
         drop(watchable);
 
-        let values = task.await.expect("task paniced").expect("value duplicated");
+        let values = task
+            .await
+            .expect("task panicked")
+            .expect("value duplicated");
         assert_eq!(values, vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
     }
 
