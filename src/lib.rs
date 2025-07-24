@@ -905,4 +905,22 @@ mod tests {
             vec![vec![1, 1], vec![2, 1], vec![2, 3], vec![3, 3], vec![3, 4]]
         );
     }
+
+    #[test]
+    fn test_has_watchers() {
+        let a = Watchable::new(1u8);
+        assert!(!a.has_watchers());
+        let b = a.clone();
+        assert!(!a.has_watchers());
+        assert!(!b.has_watchers());
+
+        let watcher = a.watch();
+        assert!(a.has_watchers());
+        assert!(b.has_watchers());
+
+        drop(watcher);
+
+        assert!(!a.has_watchers());
+        assert!(!b.has_watchers());
+    }
 }
