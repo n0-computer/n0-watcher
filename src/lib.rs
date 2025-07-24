@@ -374,9 +374,9 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         };
         match shared.poll_updated(cx, self.state.epoch) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready((current_epoch, value)) => {
-                self.state.epoch = current_epoch;
-                Poll::Ready(Ok(value))
+            Poll::Ready(current_state) => {
+                self.state = current_state;
+                Poll::Ready(Ok(self.state.value.clone()))
             }
         }
     }
@@ -638,15 +638,12 @@ impl<T: Clone> Shared<T> {
         self.state.read().expect("poisoned").clone()
     }
 
-    fn poll_updated(&self, cx: &mut task::Context<'_>, last_epoch: u64) -> Poll<(u64, T)> {
+    fn poll_updated(&self, cx: &mut task::Context<'_>, last_epoch: u64) -> Poll<State<T>> {
         {
-            let state = self.state.read().expect("poisoned");
-            let epoch = state.epoch;
+            let state = self.state.read().expect("poisoned").clone();
 
-            if last_epoch < epoch {
-                // Once initialized, our Option is never set back to None, but nevertheless
-                // this code is safer without relying on that invariant.
-                return Poll::Ready((epoch, state.value.clone()));
+            if last_epoch < state.epoch {
+                return Poll::Ready(state);
             }
         }
 
@@ -659,13 +656,10 @@ impl<T: Clone> Shared<T> {
         loom::thread::yield_now();
 
         {
-            let state = self.state.read().expect("poisoned");
-            let epoch = state.epoch;
+            let state = self.state.read().expect("poisoned").clone();
 
-            if last_epoch < epoch {
-                // Once initialized our Option is never set back to None, but nevertheless
-                // this code is safer without relying on that invariant.
-                return Poll::Ready((epoch, state.value.clone()));
+            if last_epoch < state.epoch {
+                return Poll::Ready(state);
             }
         }
 
@@ -904,6 +898,17 @@ mod tests {
             values,
             vec![vec![1, 1], vec![2, 1], vec![2, 3], vec![3, 3], vec![3, 4]]
         );
+    }
+
+    #[tokio::test]
+    async fn test_updated_then_disconnect_then_get() {
+        let watchable = Watchable::new(10);
+        let mut watcher = watchable.watch();
+        assert_eq!(watchable.get(), 10);
+        watchable.set(42).ok();
+        assert_eq!(watcher.updated().await.unwrap(), 42);
+        drop(watchable);
+        assert_eq!(watcher.get(), 42);
     }
 
     #[test]
