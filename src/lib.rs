@@ -183,6 +183,28 @@ impl<T: Clone + Eq> Watchable<T> {
     pub fn get(&self) -> T {
         self.shared.get()
     }
+
+    /// Returns true when there are any watchers actively listening on changes,
+    /// or false when all watchers have been dropped or none have been created yet.
+    pub fn has_watchers(&self) -> bool {
+        // `Watchable`s will increase the strong count
+        // `Direct`s watchers (which all watchers descend from) will increase the weak count
+        Arc::weak_count(&self.shared) != 0
+    }
+}
+
+impl<T> Drop for Watchable<T> {
+    fn drop(&mut self) {
+        let Ok(mut watchers) = self.shared.watchers.lock() else {
+            return; // Poisoned waking?
+        };
+        // Wake all watchers every time we drop.
+        // This allows us to notify `NextFut::poll`s that the underlying
+        // watchable might be dropped.
+        for watcher in watchers.drain(..) {
+            watcher.wake();
+        }
+    }
 }
 
 /// A handle to a value that's represented by one or more underlying [`Watchable`]s.
@@ -364,13 +386,8 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         let Some(shared) = self.shared.upgrade() else {
             return Poll::Ready(Err(Disconnected));
         };
-        match shared.poll_updated(cx, self.state.epoch) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready((current_epoch, value)) => {
-                self.state.epoch = current_epoch;
-                Poll::Ready(Ok(value))
-            }
-        }
+        self.state = ready!(shared.poll_updated(cx, self.state.epoch));
+        Poll::Ready(Ok(self.state.value.clone()))
     }
 }
 
@@ -630,15 +647,14 @@ impl<T: Clone> Shared<T> {
         self.state.read().expect("poisoned").clone()
     }
 
-    fn poll_updated(&self, cx: &mut task::Context<'_>, last_epoch: u64) -> Poll<(u64, T)> {
+    fn poll_updated(&self, cx: &mut task::Context<'_>, last_epoch: u64) -> Poll<State<T>> {
         {
             let state = self.state.read().expect("poisoned");
-            let epoch = state.epoch;
 
-            if last_epoch < epoch {
-                // Once initialized, our Option is never set back to None, but nevertheless
-                // this code is safer without relying on that invariant.
-                return Poll::Ready((epoch, state.value.clone()));
+            // We might get spurious wakeups due to e.g. a second-to-last Watchable being dropped.
+            // This makes sure we don't accidentally return an update that's not actually an update.
+            if last_epoch < state.epoch {
+                return Poll::Ready(state.clone());
             }
         }
 
@@ -650,14 +666,12 @@ impl<T: Clone> Shared<T> {
         #[cfg(watcher_loom)]
         loom::thread::yield_now();
 
+        // We check for an update again to prevent races between putting in wakers and looking for updates.
         {
             let state = self.state.read().expect("poisoned");
-            let epoch = state.epoch;
 
-            if last_epoch < epoch {
-                // Once initialized our Option is never set back to None, but nevertheless
-                // this code is safer without relying on that invariant.
-                return Poll::Ready((epoch, state.value.clone()));
+            if last_epoch < state.epoch {
+                return Poll::Ready(state.clone());
             }
         }
 
@@ -667,11 +681,13 @@ impl<T: Clone> Shared<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
 
     use n0_future::{future::poll_once, StreamExt};
     use rand::{thread_rng, Rng};
-    use tokio::task::JoinSet;
+    use tokio::{
+        task::JoinSet,
+        time::{Duration, Instant},
+    };
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -896,5 +912,96 @@ mod tests {
             values,
             vec![vec![1, 1], vec![2, 1], vec![2, 3], vec![3, 3], vec![3, 4]]
         );
+    }
+
+    #[tokio::test]
+    async fn test_updated_then_disconnect_then_get() {
+        let watchable = Watchable::new(10);
+        let mut watcher = watchable.watch();
+        assert_eq!(watchable.get(), 10);
+        watchable.set(42).ok();
+        assert_eq!(watcher.updated().await.unwrap(), 42);
+        drop(watchable);
+        assert_eq!(watcher.get(), 42);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_update_wakeup_on_watchable_drop() {
+        let watchable = Watchable::new(10);
+        let mut watcher = watchable.watch();
+
+        let start = Instant::now();
+        let (_, result) = tokio::time::timeout(Duration::from_secs(2), async move {
+            tokio::join!(
+                async move {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    drop(watchable);
+                },
+                async move { watcher.updated().await }
+            )
+        })
+        .await
+        .expect("watcher never updated");
+        // We should've updated 1s after start, since that's when the watchable was dropped.
+        // If this is 2s, then the watchable dropping didn't wake up the `Watcher::updated` future.
+        assert_eq!(start.elapsed(), Duration::from_secs(1));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_update_wakeup_always_a_change() {
+        let watchable = Watchable::new(10);
+        let mut watcher = watchable.watch();
+
+        let task = tokio::spawn(async move {
+            let mut last_value = watcher.get();
+            let mut values = Vec::new();
+            while let Ok(value) = watcher.updated().await {
+                values.push(value);
+                if last_value == value {
+                    return Err("value duplicated");
+                }
+                last_value = value;
+            }
+            Ok(values)
+        });
+
+        // wait for the task to get set up and polled till pending for once
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        watchable.set(11).ok();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let clone = watchable.clone();
+        drop(clone); // this shouldn't trigger an update
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for i in 1..=10 {
+            watchable.set(i + 11).ok();
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        drop(watchable);
+
+        let values = task
+            .await
+            .expect("task panicked")
+            .expect("value duplicated");
+        assert_eq!(values, vec![11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]);
+    }
+
+    #[test]
+    fn test_has_watchers() {
+        let a = Watchable::new(1u8);
+        assert!(!a.has_watchers());
+        let b = a.clone();
+        assert!(!a.has_watchers());
+        assert!(!b.has_watchers());
+
+        let watcher = a.watch();
+        assert!(a.has_watchers());
+        assert!(b.has_watchers());
+
+        drop(watcher);
+
+        assert!(!a.has_watchers());
+        assert!(!b.has_watchers());
     }
 }
