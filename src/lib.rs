@@ -225,6 +225,7 @@ impl<T> Drop for Watchable<T> {
 /// One of the underlying [`Watchable`]s might already be dropped. In that case,
 /// the watcher will be "disconnected" and return [`Err(Disconnected)`](Disconnected)
 /// on some function calls or, when turned into a stream, that stream will end.
+/// This property can also be checked with [`Watcher::is_connected`].
 pub trait Watcher: Clone {
     /// The type of value that can change.
     ///
@@ -337,16 +338,16 @@ pub trait Watcher: Clone {
     /// Maps this watcher with a function that transforms the observed values.
     ///
     /// The returned watcher will only register updates, when the *mapped* value
-    /// observably changes. For this, it needs to store a clone of `T` in the watcher.
+    /// observably changes.
     fn map<T: Clone + Eq>(
         mut self,
         map: impl Fn(Self::Value) -> T + Send + Sync + 'static,
-    ) -> Result<Map<Self, T>, Disconnected> {
-        Ok(Map {
+    ) -> Map<Self, T> {
+        Map {
             current: (map)(self.get()),
             map: Arc::new(map),
             watcher: self,
-        })
+        }
     }
 
     /// Returns a watcher that updates every time this or the other watcher
