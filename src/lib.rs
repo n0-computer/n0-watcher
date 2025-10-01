@@ -81,7 +81,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Weak},
-    task::{self, ready, Poll, Waker},
+    task::{self, Poll, Waker, ready},
 };
 
 #[cfg(watcher_loom)]
@@ -110,17 +110,35 @@ impl<T> Clone for Watchable<T> {
 pub trait Nullable<T> {
     /// Converts this value into an `Option`.
     fn into_option(self) -> Option<T>;
+
+    fn filter<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&T) -> bool;
 }
 
 impl<T> Nullable<T> for Option<T> {
     fn into_option(self) -> Option<T> {
         self
     }
+
+    fn filter<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&T) -> bool,
+    {
+        self.filter(f)
+    }
 }
 
 impl<T> Nullable<T> for Vec<T> {
     fn into_option(mut self) -> Option<T> {
         self.pop()
+    }
+
+    fn filter<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&T) -> bool,
+    {
+        todo!()
     }
 }
 
@@ -350,6 +368,24 @@ pub trait Watcher: Clone {
         }
     }
 
+    fn filter<T>(mut self, filter: impl Fn(&T) -> bool + Send + Sync + 'static) -> Filter<Self, T>
+    where
+        T: Clone + Eq,
+        Self: Watcher<Value = T>,
+    {
+        let current = self.get();
+        let current = if filter(&current) {
+            Some(current)
+        } else {
+            None
+        };
+        Filter {
+            current,
+            filter: Arc::new(filter),
+            watcher: self,
+        }
+    }
+
     /// Returns a watcher that updates every time this or the other watcher
     /// updates, and yields both watcher's items together when that happens.
     fn or<W: Watcher>(self, other: W) -> (Self, W) {
@@ -519,6 +555,57 @@ impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
     }
 }
 
+/// Wraps a [`Watcher`] to allow observing a derived value.
+///
+/// See [`Watcher::map`].
+#[derive(derive_more::Debug, Clone)]
+pub struct Filter<W, T>
+where
+    T: Clone + Eq,
+    W: Watcher<Value = T>,
+{
+    #[debug("Arc<dyn Fn(&T) -> bool + 'static>")]
+    filter: Arc<dyn Fn(&T) -> bool + Send + Sync + 'static>,
+    watcher: W,
+    current: Option<T>,
+}
+
+impl<W, T> Watcher for Filter<W, T>
+where
+    T: Clone + Eq,
+    W: Watcher<Value = T>,
+{
+    type Value = Option<T>;
+
+    fn get(&mut self) -> Self::Value {
+        self.current.clone()
+    }
+
+    fn is_connected(&self) -> bool {
+        self.watcher.is_connected()
+    }
+
+    fn poll_updated(
+        &mut self,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Result<Self::Value, Disconnected>> {
+        loop {
+            let value = ready!(self.watcher.poll_updated(cx)?);
+            let filtered = if (self.filter)(&value) {
+                Some(value)
+            } else {
+                None
+            };
+            if filtered != self.current {
+                self.current = filtered.clone();
+                return Poll::Ready(Ok(filtered));
+            } else {
+                self.current = filtered;
+            }
+        }
+    }
+}
+
 /// Future returning the next item after the current one in a [`Watcher`].
 ///
 /// See [`Watcher::updated`].
@@ -683,8 +770,8 @@ impl<T: Clone> Shared<T> {
 #[cfg(test)]
 mod tests {
 
-    use n0_future::{future::poll_once, StreamExt};
-    use rand::{thread_rng, Rng};
+    use n0_future::{StreamExt, future::poll_once};
+    use rand::{Rng, thread_rng};
     use tokio::{
         task::JoinSet,
         time::{Duration, Instant},
@@ -1004,5 +1091,28 @@ mod tests {
 
         assert!(!a.has_watchers());
         assert!(!b.has_watchers());
+    }
+
+    #[tokio::test]
+    async fn test_filter() {
+        let a = Watchable::new(1u8);
+        let mut filtered = a.watch().filter(|x| *x > 2 && *x < 6);
+
+        assert_eq!(filtered.get(), None);
+
+        let handle = tokio::task::spawn(async move { filtered.stream().collect::<Vec<_>>().await });
+
+        for i in 2u8..10 {
+            a.set(i).unwrap();
+            tokio::task::yield_now().await;
+        }
+        drop(a);
+
+        let values = tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(values, vec![None, Some(3u8), Some(4), Some(5), None]);
     }
 }
