@@ -1,0 +1,73 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Watchable values."><title>n0_watcher - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../static.files/rustdoc-dbdb5eec.css"><meta name="rustdoc-vars" data-root-path="../" data-static-root-path="../static.files/" data-current-crate="n0_watcher" data-themes="" data-resource-suffix="" data-rustdoc-version="1.85.0-nightly (d10a6823f 2024-11-29)" data-channel="nightly" data-search-js="search-92e6798f.js" data-settings-js="settings-0f613d39.js" ><script src="../static.files/storage-59e33391.js"></script><script defer src="../crates.js"></script><script defer src="../static.files/main-5f194d8c.js"></script><noscript><link rel="stylesheet" href="../static.files/noscript-893ab5e7.css"></noscript><link rel="alternate icon" type="image/png" href="../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../static.files/favicon-044be391.svg"></head><body class="rustdoc mod crate"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="mobile-topbar"><button class="sidebar-menu-toggle" title="show sidebar"></button></nav><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../n0_watcher/index.html">n0_<wbr>watcher</a><span class="version">0.3.0</span></h2></div><div class="sidebar-elems"><ul class="block"><li><a id="all-types" href="all.html">All Items</a></li></ul><section id="rustdoc-toc"><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li><li><a href="#similar-but-different" title="Similar but different">Similar but different</a></li></ul><h3><a href="#structs">Crate Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li><li><a href="#traits" title="Traits">Traits</a></li></ul></section><div id="rustdoc-modnav"></div></div></nav><div class="sidebar-resizer"></div><main><div class="width-limiter"><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1>Crate <span>n0_watcher</span><button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../src/n0_watcher/lib.rs.html#1-1123">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Watchable values.</p>
+<p>A <a href="struct.Watchable.html" title="struct n0_watcher::Watchable"><code>Watchable</code></a> exists to keep track of a value which may change over time.  It allows
+observers to be notified of changes to the value.  The aim is to always be aware of the
+<strong>last</strong> value, not to observe <em>every</em> value change.</p>
+<p>The reason for this is ergonomics and predictable resource usage: Requiring every
+intermediate value to be observable would mean that either the side that sets new values
+using <a href="struct.Watchable.html#method.set" title="method n0_watcher::Watchable::set"><code>Watchable::set</code></a> would need to wait for all “receivers” of these intermediate
+values to catch up and thus be an async operation, or it would require the receivers
+to buffer intermediate values until they’ve been “received” on the <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a>s with
+an unlimited buffer size and thus potentially unlimited memory growth.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>n0_future::StreamExt;
+<span class="kw">use </span>n0_watcher::{Watchable, Watcher <span class="kw">as _</span>};
+
+<span class="attr">#[tokio::main(flavor = <span class="string">"current_thread"</span>, start_paused = <span class="bool-val">true</span>)]
+</span><span class="kw">async fn </span>main() {
+    <span class="kw">let </span>watchable = Watchable::new(<span class="prelude-val">None</span>);
+
+    <span class="comment">// A task that waits for the watcher to be initialized to Some(value) before printing it
+    </span><span class="kw">let </span><span class="kw-2">mut </span>watcher = watchable.watch();
+    tokio::spawn(<span class="kw">async move </span>{
+        <span class="kw">let </span>initialized_value = watcher.initialized().<span class="kw">await</span>;
+        <span class="macro">println!</span>(<span class="string">"initialized: {initialized_value}"</span>);
+    });
+
+    <span class="comment">// A task that prints every update to the watcher since the initial one:
+    </span><span class="kw">let </span><span class="kw-2">mut </span>updates = watchable.watch().stream_updates_only();
+    tokio::spawn(<span class="kw">async move </span>{
+        <span class="kw">while let </span><span class="prelude-val">Some</span>(update) = updates.next().<span class="kw">await </span>{
+            <span class="macro">println!</span>(<span class="string">"update: {update:?}"</span>);
+        }
+    });
+
+    <span class="comment">// A task that prints the current value and then every update it can catch,
+    // but it also does something else which makes it very slow to pick up new
+    // values, so it'll skip some:
+    </span><span class="kw">let </span><span class="kw-2">mut </span>current_and_updates = watchable.watch().stream();
+    tokio::spawn(<span class="kw">async move </span>{
+        <span class="kw">while let </span><span class="prelude-val">Some</span>(update) = current_and_updates.next().<span class="kw">await </span>{
+            <span class="macro">println!</span>(<span class="string">"update2: {update:?}"</span>);
+            tokio::time::sleep(tokio::time::Duration::from_secs(<span class="number">1</span>)).<span class="kw">await</span>;
+        }
+    });
+
+    <span class="kw">for </span>i <span class="kw">in </span><span class="number">0</span>..<span class="number">20 </span>{
+        <span class="macro">println!</span>(<span class="string">"Setting watchable to {i}"</span>);
+        watchable.set(<span class="prelude-val">Some</span>(i)).ok();
+        tokio::time::sleep(tokio::time::Duration::from_millis(<span class="number">250</span>)).<span class="kw">await</span>;
+    }
+}</code></pre></div>
+<h2 id="similar-but-different"><a class="doc-anchor" href="#similar-but-different">§</a>Similar but different</h2>
+<ul>
+<li><code>async_channel</code>: This is a multi-producer, multi-consumer channel implementation.
+Only at most one consumer will receive each “produced” value.
+What we want is to have every “produced” value to be “broadcast” to every receiver.</li>
+<li><code>tokio::broadcast</code>: Also a multi-producer, multi-consumer channel implementation.
+This is very similar to this crate (<code>tokio::broadcast::Sender</code> is like <a href="struct.Watchable.html" title="struct n0_watcher::Watchable"><code>Watchable</code></a>
+and <code>tokio::broadcast::Receiver</code> is like <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a>), but you can’t get the latest
+value without <code>.await</code>ing on the receiver, and it’ll internally store a queue of
+intermediate values.</li>
+<li><code>tokio::watch</code>: Also a MPSC channel, and unlike <code>tokio::broadcast</code> only retains the
+latest value. That module has pretty much the same purpose as this crate, but doesn’t
+implement a poll-based method of getting updates and doesn’t implement combinators.</li>
+<li><a href="https://doc.rust-lang.org/nightly/std/sync/rwlock/struct.RwLock.html" title="struct std::sync::rwlock::RwLock"><code>std::sync::RwLock</code></a>: (wrapped in an <a href="https://doc.rust-lang.org/nightly/alloc/sync/struct.Arc.html" title="struct alloc::sync::Arc"><code>std::sync::Arc</code></a>) This allows you access
+to the latest values, but might block while it’s being set (but that could be short
+enough not to matter for async rust purposes).
+This doesn’t allow you to be notified whenever a new value is written.</li>
+<li>The <code>watchable</code> crate: We used to use this crate at n0, but we wanted to experiment
+with different APIs and needed Wasm support.</li>
+</ul>
+</div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="struct" href="struct.Direct.html" title="struct n0_watcher::Direct">Direct</a></div><div class="desc docblock-short">The immediate, direct observer of a <a href="struct.Watchable.html" title="struct n0_watcher::Watchable"><code>Watchable</code></a> value.</div></li><li><div class="item-name"><a class="struct" href="struct.Disconnected.html" title="struct n0_watcher::Disconnected">Disconnected</a></div><div class="desc docblock-short">The error for when a <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a> is disconnected from its underlying
+<a href="struct.Watchable.html" title="struct n0_watcher::Watchable"><code>Watchable</code></a> value, because of that watchable having been dropped.</div></li><li><div class="item-name"><a class="struct" href="struct.Filter.html" title="struct n0_watcher::Filter">Filter</a></div><div class="desc docblock-short">Wraps a <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a> to allow observing a derived value.</div></li><li><div class="item-name"><a class="struct" href="struct.InitializedFut.html" title="struct n0_watcher::InitializedFut">Initialized<wbr>Fut</a></div><div class="desc docblock-short">Future returning the current or next value that’s <a href="https://doc.rust-lang.org/nightly/core/option/enum.Option.html#variant.Some" title="variant core::option::Option::Some"><code>Some</code></a> value.
+in a <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.Join.html" title="struct n0_watcher::Join">Join</a></div><div class="desc docblock-short">Combinator to join two watchers</div></li><li><div class="item-name"><a class="struct" href="struct.Map.html" title="struct n0_watcher::Map">Map</a></div><div class="desc docblock-short">Wraps a <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a> to allow observing a derived value.</div></li><li><div class="item-name"><a class="struct" href="struct.NextFut.html" title="struct n0_watcher::NextFut">NextFut</a></div><div class="desc docblock-short">Future returning the next item after the current one in a <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a>.</div></li><li><div class="item-name"><a class="struct" href="struct.Stream.html" title="struct n0_watcher::Stream">Stream</a></div><div class="desc docblock-short">A stream for a <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a>’s next values.</div></li><li><div class="item-name"><a class="struct" href="struct.Watchable.html" title="struct n0_watcher::Watchable">Watchable</a></div><div class="desc docblock-short">A wrapper around a value that notifies <a href="trait.Watcher.html" title="trait n0_watcher::Watcher"><code>Watcher</code></a>s when the value is modified.</div></li></ul><h2 id="traits" class="section-header">Traits<a href="#traits" class="anchor">§</a></h2><ul class="item-table"><li><div class="item-name"><a class="trait" href="trait.Nullable.html" title="trait n0_watcher::Nullable">Nullable</a></div><div class="desc docblock-short">Abstracts over <code>Option&lt;T&gt;</code> and <code>Vec&lt;T&gt;</code></div></li><li><div class="item-name"><a class="trait" href="trait.Watcher.html" title="trait n0_watcher::Watcher">Watcher</a></div><div class="desc docblock-short">A handle to a value that’s represented by one or more underlying <a href="struct.Watchable.html" title="struct n0_watcher::Watchable"><code>Watchable</code></a>s.</div></li></ul></section></div></main></body></html>
