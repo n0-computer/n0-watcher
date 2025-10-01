@@ -81,7 +81,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, Weak},
-    task::{self, Poll, Waker, ready},
+    task::{self, ready, Poll, Waker},
 };
 
 #[cfg(watcher_loom)]
@@ -110,35 +110,17 @@ impl<T> Clone for Watchable<T> {
 pub trait Nullable<T> {
     /// Converts this value into an `Option`.
     fn into_option(self) -> Option<T>;
-
-    fn filter<F>(self, f: F) -> Self
-    where
-        F: FnOnce(&T) -> bool;
 }
 
 impl<T> Nullable<T> for Option<T> {
     fn into_option(self) -> Option<T> {
         self
     }
-
-    fn filter<F>(self, f: F) -> Self
-    where
-        F: FnOnce(&T) -> bool,
-    {
-        self.filter(f)
-    }
 }
 
 impl<T> Nullable<T> for Vec<T> {
     fn into_option(mut self) -> Option<T> {
         self.pop()
-    }
-
-    fn filter<F>(self, f: F) -> Self
-    where
-        F: FnOnce(&T) -> bool,
-    {
-        todo!()
     }
 }
 
@@ -770,8 +752,8 @@ impl<T: Clone> Shared<T> {
 #[cfg(test)]
 mod tests {
 
-    use n0_future::{StreamExt, future::poll_once};
-    use rand::{Rng, thread_rng};
+    use n0_future::{future::poll_once, StreamExt};
+    use rand::{thread_rng, Rng};
     use tokio::{
         task::JoinSet,
         time::{Duration, Instant},
@@ -1094,7 +1076,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_filter() {
+    async fn test_filter_basic() {
         let a = Watchable::new(1u8);
         let mut filtered = a.watch().filter(|x| *x > 2 && *x < 6);
 
@@ -1114,5 +1096,28 @@ mod tests {
             .unwrap();
 
         assert_eq!(values, vec![None, Some(3u8), Some(4), Some(5), None]);
+    }
+
+    #[tokio::test]
+    async fn test_filter_init() {
+        let a = Watchable::new(1u8);
+        let mut filtered = a.watch().filter(|x| *x > 2 && *x < 6);
+
+        assert_eq!(filtered.get(), None);
+
+        let handle = tokio::task::spawn(async move { filtered.initialized().await });
+
+        for i in 2u8..10 {
+            a.set(i).unwrap();
+            tokio::task::yield_now().await;
+        }
+        drop(a);
+
+        let value = tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(value, 3);
     }
 }
