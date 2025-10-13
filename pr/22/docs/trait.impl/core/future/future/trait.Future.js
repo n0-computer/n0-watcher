@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["n0_watcher",[["impl&lt;T: <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/clone/trait.Clone.html\" title=\"trait core::clone::Clone\">Clone</a> + <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/cmp/trait.Eq.html\" title=\"trait core::cmp::Eq\">Eq</a> + <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/marker/trait.Unpin.html\" title=\"trait core::marker::Unpin\">Unpin</a>, V: <a class=\"trait\" href=\"n0_watcher/trait.Nullable.html\" title=\"trait n0_watcher::Nullable\">Nullable</a>&lt;T&gt;, W: <a class=\"trait\" href=\"n0_watcher/trait.Watcher.html\" title=\"trait n0_watcher::Watcher\">Watcher</a>&lt;Value = V&gt; + <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/marker/trait.Unpin.html\" title=\"trait core::marker::Unpin\">Unpin</a>&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html\" title=\"trait core::future::future::Future\">Future</a> for <a class=\"struct\" href=\"n0_watcher/struct.InitializedFut.html\" title=\"struct n0_watcher::InitializedFut\">InitializedFut</a>&lt;'_, T, V, W&gt;"],["impl&lt;W: <a class=\"trait\" href=\"n0_watcher/trait.Watcher.html\" title=\"trait n0_watcher::Watcher\">Watcher</a>&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/core/future/future/trait.Future.html\" title=\"trait core::future::future::Future\">Future</a> for <a class=\"struct\" href=\"n0_watcher/struct.NextFut.html\" title=\"struct n0_watcher::NextFut\">NextFut</a>&lt;'_, W&gt;"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1535]}
