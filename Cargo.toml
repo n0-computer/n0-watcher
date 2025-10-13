@@ -13,7 +13,7 @@ keywords = ["async", "watcher"]
 [dependencies]
 derive_more = { version = "1.0.0", features = ["debug"] }
 n0-future = "0.1.2"
-snafu = "0.8.6"
+snafu = "0.8.9"
 
 # non-wasm-in-browser dependencies
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
