@@ -1692,7 +1692,7 @@
 </span><span class="kw">mod </span>tests {
 
     <span class="kw">use </span>n0_future::{future::poll_once, StreamExt};
-    <span class="kw">use </span>rand::{thread_rng, Rng};
+    <span class="kw">use </span>rand::{rng, Rng};
     <span class="kw">use </span>tokio::{
         task::JoinSet,
         time::{Duration, Instant},
@@ -1767,7 +1767,7 @@
 
         <span class="comment">// set value
         </span><span class="kw">for </span>next_value <span class="kw">in </span><span class="number">0</span>..<span class="number">10 </span>{
-            <span class="kw">let </span>sleep = Duration::from_nanos(thread_rng().gen_range(<span class="number">0</span>..<span class="number">100_000_000</span>));
+            <span class="kw">let </span>sleep = Duration::from_nanos(rng().random_range(<span class="number">0</span>..<span class="number">100_000_000</span>));
             <span class="macro">println!</span>(<span class="string">"{:?} sleep {sleep:?}"</span>, start.elapsed());
             tokio::time::sleep(sleep).<span class="kw">await</span>;
 
@@ -1866,7 +1866,7 @@
                         <span class="macro">assert_ne!</span>(val, last_observed, <span class="string">"never observe the same value twice, even with cancellation"</span>);
                         last_observed = val;
                     }
-                    <span class="kw">_ </span>= tokio::time::sleep(Duration::from_micros(thread_rng().gen_range(<span class="number">0</span>..<span class="number">10_000</span>))) =&gt; {
+                    <span class="kw">_ </span>= tokio::time::sleep(Duration::from_micros(rng().random_range(<span class="number">0</span>..<span class="number">10_000</span>))) =&gt; {
                         <span class="comment">// We cancel the other future and start over again
                         </span><span class="kw">continue</span>;
                     }
@@ -1876,7 +1876,7 @@
 
         <span class="kw">for </span>i <span class="kw">in </span><span class="number">1</span>..=MAX {
             watchable.set(i).ok();
-            <span class="kw">if </span>thread_rng().gen_bool(<span class="number">0.2</span>) {
+            <span class="kw">if </span>rng().random_bool(<span class="number">0.2</span>) {
                 tokio::task::yield_now().<span class="kw">await</span>;
             }
         }
