@@ -684,7 +684,7 @@ impl<T: Clone> Shared<T> {
 mod tests {
 
     use n0_future::{future::poll_once, StreamExt};
-    use rand::{thread_rng, Rng};
+    use rand::{rng, Rng};
     use tokio::{
         task::JoinSet,
         time::{Duration, Instant},
@@ -759,7 +759,7 @@ mod tests {
 
         // set value
         for next_value in 0..10 {
-            let sleep = Duration::from_nanos(thread_rng().gen_range(0..100_000_000));
+            let sleep = Duration::from_nanos(rng().random_range(0..100_000_000));
             println!("{:?} sleep {sleep:?}", start.elapsed());
             tokio::time::sleep(sleep).await;
 
@@ -858,7 +858,7 @@ mod tests {
                         assert_ne!(val, last_observed, "never observe the same value twice, even with cancellation");
                         last_observed = val;
                     }
-                    _ = tokio::time::sleep(Duration::from_micros(thread_rng().gen_range(0..10_000))) => {
+                    _ = tokio::time::sleep(Duration::from_micros(rng().random_range(0..10_000))) => {
                         // We cancel the other future and start over again
                         continue;
                     }
@@ -868,7 +868,7 @@ mod tests {
 
         for i in 1..=MAX {
             watchable.set(i).ok();
-            if thread_rng().gen_bool(0.2) {
+            if rng().random_bool(0.2) {
                 tokio::task::yield_now().await;
             }
         }
