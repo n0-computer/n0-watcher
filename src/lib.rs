@@ -418,6 +418,53 @@ impl<S: Watcher, T: Watcher> Watcher for (S, T) {
     }
 }
 
+impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
+    type Value = (S::Value, T::Value, U::Value);
+
+    fn get(&mut self) -> Self::Value {
+        (self.0.get(), self.1.get(), self.2.get())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.0.is_connected() && self.1.is_connected() && self.2.is_connected()
+    }
+
+    fn poll_updated(
+        &mut self,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Result<Self::Value, Disconnected>> {
+        let poll_0 = self.0.poll_updated(cx)?;
+        let poll_1 = self.1.poll_updated(cx)?;
+        let poll_2 = self.2.poll_updated(cx)?;
+
+        match (poll_0, poll_1, poll_2) {
+            // If all are ready
+            (Poll::Ready(s), Poll::Ready(t), Poll::Ready(u)) => Poll::Ready(Ok((s, t, u))),
+            // If any one is ready, get current values for the others
+            (Poll::Ready(s), Poll::Ready(t), Poll::Pending) => {
+                Poll::Ready(Ok((s, t, self.2.get())))
+            }
+            (Poll::Ready(s), Poll::Pending, Poll::Ready(u)) => {
+                Poll::Ready(Ok((s, self.1.get(), u)))
+            }
+            (Poll::Pending, Poll::Ready(t), Poll::Ready(u)) => {
+                Poll::Ready(Ok((self.0.get(), t, u)))
+            }
+            (Poll::Ready(s), Poll::Pending, Poll::Pending) => {
+                Poll::Ready(Ok((s, self.1.get(), self.2.get())))
+            }
+            (Poll::Pending, Poll::Ready(t), Poll::Pending) => {
+                Poll::Ready(Ok((self.0.get(), t, self.2.get())))
+            }
+            (Poll::Pending, Poll::Pending, Poll::Ready(u)) => {
+                Poll::Ready(Ok((self.0.get(), self.1.get(), u)))
+            }
+            // If none are ready
+            (Poll::Pending, Poll::Pending, Poll::Pending) => Poll::Pending,
+        }
+    }
+}
+
 /// Combinator to join two watchers
 #[derive(Debug, Clone)]
 pub struct Join<T: Clone + Eq, W: Watcher<Value = T>> {
