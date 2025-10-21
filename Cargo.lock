@@ -302,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "n0-watcher"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "derive_more 2.0.1",
  "n0-future",
