@@ -9,6 +9,8 @@ authors = ["dignifiedquire <me@dignifiedquire.com>", "n0 team"]
 repository = "https://github.com/n0-computer/n0-watcher"
 keywords = ["async", "watcher"]
 
+# Sadly this also needs to be updated in .github/workflows/ci.yml
+rust-version = "1.85"
 
 [dependencies]
 derive_more = { version = "2.0.1", features = ["debug"] }
