@@ -86,7 +86,7 @@ use std::{
 
 #[cfg(watcher_loom)]
 use loom::sync;
-use snafu::Snafu;
+use n0_error::StackError;
 use sync::{Mutex, RwLock};
 
 /// A wrapper around a value that notifies [`Watcher`]s when the value is modified.
@@ -607,8 +607,8 @@ where
 
 /// The error for when a [`Watcher`] is disconnected from its underlying
 /// [`Watchable`] value, because of that watchable having been dropped.
-#[derive(Snafu, Debug)]
-#[snafu(display("Watcher lost connection to underlying Watchable, it was dropped"))]
+#[derive(StackError)]
+#[error("Watcher lost connection to underlying Watchable, it was dropped")]
 pub struct Disconnected;
 
 // Private:
