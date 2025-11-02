@@ -1,6 +1,6 @@
 [package]
 name = "n0-watcher"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 readme = "README.md"
 description = "async watchable values"
@@ -9,10 +9,12 @@ authors = ["dignifiedquire <me@dignifiedquire.com>", "n0 team"]
 repository = "https://github.com/n0-computer/n0-watcher"
 keywords = ["async", "watcher"]
 
+# Sadly this also needs to be updated in .github/workflows/ci.yml
+rust-version = "1.85"
 
 [dependencies]
-derive_more = { version = "1.0.0", features = ["debug"] }
-n0-future = "0.1.2"
+derive_more = { version = "2.0.1", features = ["debug"] }
+n0-future = "0.3.0"
 snafu = "0.8.6"
 
 # non-wasm-in-browser dependencies
@@ -22,8 +24,7 @@ snafu = "0.8.6"
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
 
 [dev-dependencies]
-n0-future = "0.1.2"
-rand = "0.8"
+rand = "0.9"
 tokio = { version = "1", features = ["macros", "sync", "rt-multi-thread", "time", "test-util"] }
 tokio-util = { version = "0.7", features = ["io-util", "io", "rt"] }
 

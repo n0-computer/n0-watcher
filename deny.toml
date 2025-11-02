@@ -16,9 +16,7 @@ multiple-versions = "allow"
 allow = [
     "Apache-2.0",
     "MIT",
-    "Zlib",
     "Unicode-3.0",
-    "Unlicense",
 ]
 
 [[licenses.clarify]]
