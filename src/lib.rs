@@ -437,20 +437,20 @@ impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
         let poll_1 = self.1.poll_updated(cx)?;
         let poll_2 = self.2.poll_updated(cx)?;
 
-        if poll_0.is_pending() && poll_1.is_pending() && poll2.is_pending() {
+        if poll_0.is_pending() && poll_1.is_pending() && poll_2.is_pending() {
             Poll::Pending
         } else {
-             fn to_option<T>(poll: Poll<T>) -> Option<T> {
-                 match poll {
-                     Poll::Result(t) => Some(t),
-                     Poll::Pending => None,
-                 }
+            fn to_option<T>(poll: Poll<T>) -> Option<T> {
+                match poll {
+                    Poll::Ready(t) => Some(t),
+                    Poll::Pending => None,
+                }
             }
-            
-            let s = to_option(s).unwrap_or_else(|| self.0.get());
-            let t = to_option(t).unwrap_or_else(|| self.1.get());
-            let u = to_option(u).unwrap_or_else(|| self.2.get());
-            Poll::Ready(Ok((s, t, u))
+
+            let s = to_option(poll_0).unwrap_or_else(|| self.0.get());
+            let t = to_option(poll_1).unwrap_or_else(|| self.1.get());
+            let u = to_option(poll_2).unwrap_or_else(|| self.2.get());
+            Poll::Ready(Ok((s, t, u)))
         }
     }
 }
@@ -1044,8 +1044,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_three_watchers_basic(){
-
+    async fn test_three_watchers_basic() {
         let watchable = Watchable::new(1u8);
 
         let mut w1 = watchable.watch();
@@ -1054,9 +1053,9 @@ mod tests {
 
         // All see the initial value
 
-        assert_eq!(w1.get(),1);
-        assert_eq!(w2.get(),1);
-        assert_eq!(w3.get(),1);
+        assert_eq!(w1.get(), 1);
+        assert_eq!(w2.get(), 1);
+        assert_eq!(w3.get(), 1);
 
         // Change  value
         watchable.set(42).unwrap();
@@ -1065,11 +1064,10 @@ mod tests {
         assert_eq!(w1.updated().await.unwrap(), 42);
         assert_eq!(w2.updated().await.unwrap(), 42);
         assert_eq!(w3.updated().await.unwrap(), 42);
-
     }
 
     #[tokio::test]
-    async fn test_three_watchers_skip_intermediate(){
+    async fn test_three_watchers_skip_intermediate() {
         let watchable = Watchable::new(0u8);
         let mut watcher = watchable.watch();
 
@@ -1081,12 +1079,10 @@ mod tests {
         let value = watcher.updated().await.unwrap();
 
         assert_eq!(value, 4);
-
     }
 
     #[tokio::test]
-    async fn test_three_watchers_with_streams(){
-
+    async fn test_three_watchers_with_streams() {
         let watchable = Watchable::new(10u8);
 
         let mut stream1 = watchable.watch().stream();
@@ -1096,19 +1092,17 @@ mod tests {
         assert_eq!(stream1.next().await.unwrap(), 10);
         assert_eq!(stream2.next().await.unwrap(), 10);
 
-        //update the value
+        // Update the value
         watchable.set(20).ok();
 
-        //All streams see the update
+        // All streams see the update
         assert_eq!(stream1.next().await.unwrap(), 20);
         assert_eq!(stream2.next().await.unwrap(), 20);
         assert_eq!(stream3.next().await.unwrap(), 20);
-
     }
 
     #[tokio::test]
-    async fn test_three_watchers_independent(){
-
+    async fn test_three_watchers_independent() {
         let watchable = Watchable::new(0u8);
 
         let mut fast_watcher = watchable.watch();
@@ -1118,41 +1112,35 @@ mod tests {
         watchable.set(1).ok();
         assert_eq!(fast_watcher.updated().await.unwrap(), 1);
 
-        //More updates happen
+        // More updates happen
         watchable.set(2).ok();
         watchable.set(3).ok();
 
         assert_eq!(slow_watcher.updated().await.unwrap(), 3);
         assert_eq!(lazy_watcher.get(), 3);
-
     }
 
     #[tokio::test]
-    async fn test_combine_three_watchers(){
-
+    async fn test_combine_three_watchers() {
         let a = Watchable::new(1u8);
         let b = Watchable::new(2u8);
         let c = Watchable::new(3u8);
 
         let mut combined = (a.watch(), b.watch(), c.watch());
 
-        assert_eq!(combined.get(), (1,2,3));
+        assert_eq!(combined.get(), (1, 2, 3));
 
         // Update one
         b.set(20).ok();
 
-        assert_eq!(combined.updated().await.unwrap(), (1,20,3));
+        assert_eq!(combined.updated().await.unwrap(), (1, 20, 3));
 
         c.set(30).ok();
-        assert_eq!(combined.updated().await.unwrap(), (1,20,30));
-
-
+        assert_eq!(combined.updated().await.unwrap(), (1, 20, 30));
     }
 
-
     #[tokio::test]
-    async fn test_three_watchers_disconnection(){
-
+    async fn test_three_watchers_disconnection() {
         let watchable = Watchable::new(5u8);
 
         // All connected
@@ -1163,7 +1151,7 @@ mod tests {
         // Drop the watchable
         drop(watchable);
 
-        //All become disconnected
+        // All become disconnected
         assert!(!w1.is_connected());
         assert!(!w2.is_connected());
         assert!(!w3.is_connected());
@@ -1225,5 +1213,5 @@ mod tests {
             println!("Reader {}: saw values {:?}", task_id, values);
             assert!(!values.is_empty());
         }
-
-    }}
+    }
+}
