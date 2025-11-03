@@ -437,30 +437,20 @@ impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
         let poll_1 = self.1.poll_updated(cx)?;
         let poll_2 = self.2.poll_updated(cx)?;
 
-        match (poll_0, poll_1, poll_2) {
-            // If all are ready
-            (Poll::Ready(s), Poll::Ready(t), Poll::Ready(u)) => Poll::Ready(Ok((s, t, u))),
-            // If any one is ready, get current values for the others
-            (Poll::Ready(s), Poll::Ready(t), Poll::Pending) => {
-                Poll::Ready(Ok((s, t, self.2.get())))
+        if poll_0.is_pending() && poll_1.is_pending() && poll2.is_pending() {
+            Poll::Pending
+        } else {
+             fn to_option<T>(poll: Poll<T>) -> Option<T> {
+                 match poll {
+                     Poll::Result(t) => Some(t),
+                     Poll::Pending => None,
+                 }
             }
-            (Poll::Ready(s), Poll::Pending, Poll::Ready(u)) => {
-                Poll::Ready(Ok((s, self.1.get(), u)))
-            }
-            (Poll::Pending, Poll::Ready(t), Poll::Ready(u)) => {
-                Poll::Ready(Ok((self.0.get(), t, u)))
-            }
-            (Poll::Ready(s), Poll::Pending, Poll::Pending) => {
-                Poll::Ready(Ok((s, self.1.get(), self.2.get())))
-            }
-            (Poll::Pending, Poll::Ready(t), Poll::Pending) => {
-                Poll::Ready(Ok((self.0.get(), t, self.2.get())))
-            }
-            (Poll::Pending, Poll::Pending, Poll::Ready(u)) => {
-                Poll::Ready(Ok((self.0.get(), self.1.get(), u)))
-            }
-            // If none are ready
-            (Poll::Pending, Poll::Pending, Poll::Pending) => Poll::Pending,
+            
+            let s = to_option(s).unwrap_or_else(|| self.0.get());
+            let t = to_option(t).unwrap_or_else(|| self.1.get());
+            let u = to_option(u).unwrap_or_else(|| self.2.get());
+            Poll::Ready(Ok((s, t, u))
         }
     }
 }
