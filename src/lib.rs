@@ -418,6 +418,43 @@ impl<S: Watcher, T: Watcher> Watcher for (S, T) {
     }
 }
 
+impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
+    type Value = (S::Value, T::Value, U::Value);
+
+    fn get(&mut self) -> Self::Value {
+        (self.0.get(), self.1.get(), self.2.get())
+    }
+
+    fn is_connected(&self) -> bool {
+        self.0.is_connected() && self.1.is_connected() && self.2.is_connected()
+    }
+
+    fn poll_updated(
+        &mut self,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Result<Self::Value, Disconnected>> {
+        let poll_0 = self.0.poll_updated(cx)?;
+        let poll_1 = self.1.poll_updated(cx)?;
+        let poll_2 = self.2.poll_updated(cx)?;
+
+        if poll_0.is_pending() && poll_1.is_pending() && poll_2.is_pending() {
+            Poll::Pending
+        } else {
+            fn to_option<T>(poll: Poll<T>) -> Option<T> {
+                match poll {
+                    Poll::Ready(t) => Some(t),
+                    Poll::Pending => None,
+                }
+            }
+
+            let s = to_option(poll_0).unwrap_or_else(|| self.0.get());
+            let t = to_option(poll_1).unwrap_or_else(|| self.1.get());
+            let u = to_option(poll_2).unwrap_or_else(|| self.2.get());
+            Poll::Ready(Ok((s, t, u)))
+        }
+    }
+}
+
 /// Combinator to join two watchers
 #[derive(Debug, Clone)]
 pub struct Join<T: Clone + Eq, W: Watcher<Value = T>> {
@@ -1004,5 +1041,177 @@ mod tests {
 
         assert!(!a.has_watchers());
         assert!(!b.has_watchers());
+    }
+
+    #[tokio::test]
+    async fn test_three_watchers_basic() {
+        let watchable = Watchable::new(1u8);
+
+        let mut w1 = watchable.watch();
+        let mut w2 = watchable.watch();
+        let mut w3 = watchable.watch();
+
+        // All see the initial value
+
+        assert_eq!(w1.get(), 1);
+        assert_eq!(w2.get(), 1);
+        assert_eq!(w3.get(), 1);
+
+        // Change  value
+        watchable.set(42).unwrap();
+
+        // All watchers get notified
+        assert_eq!(w1.updated().await.unwrap(), 42);
+        assert_eq!(w2.updated().await.unwrap(), 42);
+        assert_eq!(w3.updated().await.unwrap(), 42);
+    }
+
+    #[tokio::test]
+    async fn test_three_watchers_skip_intermediate() {
+        let watchable = Watchable::new(0u8);
+        let mut watcher = watchable.watch();
+
+        watchable.set(1).ok();
+        watchable.set(2).ok();
+        watchable.set(3).ok();
+        watchable.set(4).ok();
+
+        let value = watcher.updated().await.unwrap();
+
+        assert_eq!(value, 4);
+    }
+
+    #[tokio::test]
+    async fn test_three_watchers_with_streams() {
+        let watchable = Watchable::new(10u8);
+
+        let mut stream1 = watchable.watch().stream();
+        let mut stream2 = watchable.watch().stream();
+        let mut stream3 = watchable.watch().stream_updates_only();
+
+        assert_eq!(stream1.next().await.unwrap(), 10);
+        assert_eq!(stream2.next().await.unwrap(), 10);
+
+        // Update the value
+        watchable.set(20).ok();
+
+        // All streams see the update
+        assert_eq!(stream1.next().await.unwrap(), 20);
+        assert_eq!(stream2.next().await.unwrap(), 20);
+        assert_eq!(stream3.next().await.unwrap(), 20);
+    }
+
+    #[tokio::test]
+    async fn test_three_watchers_independent() {
+        let watchable = Watchable::new(0u8);
+
+        let mut fast_watcher = watchable.watch();
+        let mut slow_watcher = watchable.watch();
+        let mut lazy_watcher = watchable.watch();
+
+        watchable.set(1).ok();
+        assert_eq!(fast_watcher.updated().await.unwrap(), 1);
+
+        // More updates happen
+        watchable.set(2).ok();
+        watchable.set(3).ok();
+
+        assert_eq!(slow_watcher.updated().await.unwrap(), 3);
+        assert_eq!(lazy_watcher.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_combine_three_watchers() {
+        let a = Watchable::new(1u8);
+        let b = Watchable::new(2u8);
+        let c = Watchable::new(3u8);
+
+        let mut combined = (a.watch(), b.watch(), c.watch());
+
+        assert_eq!(combined.get(), (1, 2, 3));
+
+        // Update one
+        b.set(20).ok();
+
+        assert_eq!(combined.updated().await.unwrap(), (1, 20, 3));
+
+        c.set(30).ok();
+        assert_eq!(combined.updated().await.unwrap(), (1, 20, 30));
+    }
+
+    #[tokio::test]
+    async fn test_three_watchers_disconnection() {
+        let watchable = Watchable::new(5u8);
+
+        // All connected
+        let mut w1 = watchable.watch();
+        let mut w2 = watchable.watch();
+        let mut w3 = watchable.watch();
+
+        // Drop the watchable
+        drop(watchable);
+
+        // All become disconnected
+        assert!(!w1.is_connected());
+        assert!(!w2.is_connected());
+        assert!(!w3.is_connected());
+
+        // Can still get last known value
+        assert_eq!(w1.get(), 5);
+        assert_eq!(w2.get(), 5);
+
+        // But updates fail
+        assert!(w3.updated().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_three_watchers_truly_concurrent() {
+        use tokio::time::sleep;
+        let watchable = Watchable::new(0u8);
+
+        // Spawn three READER tasks
+        let mut reader_handles = vec![];
+        for i in 0..3 {
+            let mut watcher = watchable.watch();
+            let handle = tokio::spawn(async move {
+                let mut values = vec![];
+                // Collect up to 5 updates
+                for _ in 0..5 {
+                    if let Ok(value) = watcher.updated().await {
+                        values.push(value);
+                    } else {
+                        break;
+                    }
+                }
+                (i, values)
+            });
+            reader_handles.push(handle);
+        }
+
+        // Spawn three WRITER tasks that update concurrently
+        let mut writer_handles = vec![];
+        for i in 0..3 {
+            let watchable_clone = watchable.clone();
+            let handle = tokio::spawn(async move {
+                for j in 0..5 {
+                    let value = (i * 10) + j;
+                    watchable_clone.set(value).ok();
+                    sleep(Duration::from_millis(5)).await;
+                }
+            });
+            writer_handles.push(handle);
+        }
+
+        // Wait for writers to finish
+        for handle in writer_handles {
+            handle.await.unwrap();
+        }
+
+        // Wait for readers and check results
+        for handle in reader_handles {
+            let (task_id, values) = handle.await.unwrap();
+            println!("Reader {}: saw values {:?}", task_id, values);
+            assert!(!values.is_empty());
+        }
     }
 }
