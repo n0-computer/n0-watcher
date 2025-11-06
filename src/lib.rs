@@ -237,6 +237,10 @@ pub trait Watcher: Clone {
     /// not, so we can notify or not notify accordingly.
     type Value: Clone + Eq;
 
+    type RefValue<'a>
+    where
+        Self: 'a;
+
     /// Returns the current state of the underlying value.
     ///
     /// If any of the underlying [`Watchable`] values has been dropped, then this
@@ -244,6 +248,9 @@ pub trait Watcher: Clone {
     /// value that was fetched for that watchable, as opposed to the latest value
     /// that was set on the watchable before it was dropped.
     fn get(&mut self) -> Self::Value;
+
+    /// Returns a reference to the underlying value.
+    fn get_ref(&mut self) -> Self::RefValue<'_>;
 
     /// Whether this watcher is still connected to all of its underlying [`Watchable`]s.
     ///
@@ -368,12 +375,23 @@ pub struct Direct<T> {
 
 impl<T: Clone + Eq> Watcher for Direct<T> {
     type Value = T;
+    type RefValue<'a>
+        = &'a T
+    where
+        Self: 'a;
 
     fn get(&mut self) -> Self::Value {
         if let Some(shared) = self.shared.upgrade() {
             self.state = shared.state();
         }
         self.state.value.clone()
+    }
+
+    fn get_ref(&mut self) -> &Self::Value {
+        if let Some(shared) = self.shared.upgrade() {
+            self.state = shared.state();
+        }
+        &self.state.value
     }
 
     fn is_connected(&self) -> bool {
@@ -394,9 +412,17 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
 
 impl<S: Watcher, T: Watcher> Watcher for (S, T) {
     type Value = (S::Value, T::Value);
+    type RefValue<'a>
+        = (S::RefValue<'a>, T::RefValue<'a>)
+    where
+        Self: 'a;
 
     fn get(&mut self) -> Self::Value {
         (self.0.get(), self.1.get())
+    }
+
+    fn get_ref(&mut self) -> Self::RefValue<'_> {
+        (self.0.get_ref(), self.1.get_ref())
     }
 
     fn is_connected(&self) -> bool {
@@ -420,9 +446,17 @@ impl<S: Watcher, T: Watcher> Watcher for (S, T) {
 
 impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
     type Value = (S::Value, T::Value, U::Value);
+    type RefValue<'a>
+        = (S::RefValue<'a>, T::RefValue<'a>, U::RefValue<'a>)
+    where
+        Self: 'a;
 
     fn get(&mut self) -> Self::Value {
         (self.0.get(), self.1.get(), self.2.get())
+    }
+
+    fn get_ref(&mut self) -> Self::RefValue<'_> {
+        (self.0.get_ref(), self.1.get_ref(), self.2.get_ref())
     }
 
     fn is_connected(&self) -> bool {
@@ -459,18 +493,27 @@ impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
 #[derive(Debug, Clone)]
 pub struct Join<T: Clone + Eq, W: Watcher<Value = T>> {
     watchers: Vec<W>,
+    current: Vec<T>,
 }
 impl<T: Clone + Eq, W: Watcher<Value = T>> Join<T, W> {
     /// Joins a set of watchers into a single watcher
     pub fn new(watchers: impl Iterator<Item = W>) -> Self {
-        let watchers: Vec<W> = watchers.into_iter().collect();
+        let mut watchers: Vec<W> = watchers.into_iter().collect();
 
-        Self { watchers }
+        let mut current = Vec::with_capacity(watchers.len());
+        for watcher in &mut watchers {
+            current.push(watcher.get());
+        }
+        Self { watchers, current }
     }
 }
 
 impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
     type Value = Vec<T>;
+    type RefValue<'a>
+        = &'a Vec<T>
+    where
+        Self: 'a;
 
     fn get(&mut self) -> Self::Value {
         let mut out = Vec::with_capacity(self.watchers.len());
@@ -478,7 +521,15 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
             out.push(watcher.get());
         }
 
+        if self.current != out {
+            self.current = out.clone();
+        }
+
         out
+    }
+
+    fn get_ref(&mut self) -> Self::RefValue<'_> {
+        &self.current
     }
 
     fn is_connected(&self) -> bool {
@@ -510,6 +561,10 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
                     new.push(new_value.clone());
                 }
             }
+            if self.current != new {
+                self.current = new.clone();
+            }
+
             Poll::Ready(Ok(new))
         } else {
             Poll::Pending
@@ -522,7 +577,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
 /// See [`Watcher::map`].
 #[derive(derive_more::Debug, Clone)]
 pub struct Map<W: Watcher, T: Clone + Eq> {
-    #[debug("Arc<dyn Fn(W::Value) -> T + 'static>")]
+    #[debug("Arc<dyn Fn(W::Value) -> T>")]
     map: Arc<dyn Fn(W::Value) -> T + Send + Sync + 'static>,
     watcher: W,
     current: T,
@@ -530,9 +585,21 @@ pub struct Map<W: Watcher, T: Clone + Eq> {
 
 impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
     type Value = T;
+    type RefValue<'a>
+        = &'a T
+    where
+        Self: 'a;
 
     fn get(&mut self) -> Self::Value {
-        (self.map)(self.watcher.get())
+        let new = (self.map)(self.watcher.get());
+        if new != self.current {
+            self.current = new.clone();
+        }
+        new
+    }
+
+    fn get_ref(&mut self) -> Self::RefValue<'_> {
+        &self.current
     }
 
     fn is_connected(&self) -> bool {
@@ -1213,5 +1280,34 @@ mod tests {
             println!("Reader {}: saw values {:?}", task_id, values);
             assert!(!values.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn test_ref() {
+        let a = Watchable::new(vec![1, 2, 3]);
+        let mut wa = a.watch();
+
+        assert_eq!(wa.get(), vec![1, 2, 3]);
+        assert_eq!(wa.get_ref(), &vec![1, 2, 3]);
+
+        let mut wa_map = wa.map(|a| a.into_iter().map(|a| a * 2).collect::<Vec<_>>());
+
+        assert_eq!(wa_map.get(), vec![2, 4, 6]);
+        assert_eq!(wa_map.get_ref(), &vec![2, 4, 6]);
+
+        let mut wb = a.watch();
+
+        assert_eq!(wb.get(), vec![1, 2, 3]);
+        assert_eq!(wb.get_ref(), &vec![1, 2, 3]);
+
+        let mut wb_map = wb.map(|a| a.into_iter().map(|a| a * 2).collect::<Vec<_>>());
+
+        assert_eq!(wb_map.get(), vec![2, 4, 6]);
+        assert_eq!(wb_map.get_ref(), &vec![2, 4, 6]);
+
+        let mut w_join = Join::new([wa_map, wb_map].into_iter());
+
+        assert_eq!(w_join.get(), vec![vec![2, 4, 6], vec![2, 4, 6]]);
+        assert_eq!(w_join.get_ref(), &vec![vec![2, 4, 6], vec![2, 4, 6]]);
     }
 }
