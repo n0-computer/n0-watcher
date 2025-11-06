@@ -250,7 +250,7 @@ pub trait Watcher: Clone {
     fn get(&mut self) -> Self::Value;
 
     /// Returns a reference to the underlying value.
-    fn get_ref(&mut self) -> Self::RefValue<'_>;
+    fn get_ref(&self) -> Self::RefValue<'_>;
 
     /// Whether this watcher is still connected to all of its underlying [`Watchable`]s.
     ///
@@ -387,10 +387,7 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         self.state.value.clone()
     }
 
-    fn get_ref(&mut self) -> &Self::Value {
-        if let Some(shared) = self.shared.upgrade() {
-            self.state = shared.state();
-        }
+    fn get_ref(&self) -> &Self::Value {
         &self.state.value
     }
 
@@ -421,7 +418,7 @@ impl<S: Watcher, T: Watcher> Watcher for (S, T) {
         (self.0.get(), self.1.get())
     }
 
-    fn get_ref(&mut self) -> Self::RefValue<'_> {
+    fn get_ref(&self) -> Self::RefValue<'_> {
         (self.0.get_ref(), self.1.get_ref())
     }
 
@@ -455,7 +452,7 @@ impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
         (self.0.get(), self.1.get(), self.2.get())
     }
 
-    fn get_ref(&mut self) -> Self::RefValue<'_> {
+    fn get_ref(&self) -> Self::RefValue<'_> {
         (self.0.get_ref(), self.1.get_ref(), self.2.get_ref())
     }
 
@@ -528,7 +525,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
         out
     }
 
-    fn get_ref(&mut self) -> Self::RefValue<'_> {
+    fn get_ref(&self) -> Self::RefValue<'_> {
         &self.current
     }
 
@@ -598,7 +595,7 @@ impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
         new
     }
 
-    fn get_ref(&mut self) -> Self::RefValue<'_> {
+    fn get_ref(&self) -> Self::RefValue<'_> {
         &self.current
     }
 
