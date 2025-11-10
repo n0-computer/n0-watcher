@@ -179,6 +179,20 @@ impl<T: Clone + Eq> Watchable<T> {
         }
     }
 
+    /// Creates a [`LazyDirect`] [`Watcher`], allowing the value to be observed, but not modified.
+    ///
+    /// The [`LazyDirect`] watcher does not store the current value, making it smaller. If the watchable
+    /// is dropped, [`LazyDirect::get`] returns `T::default`.
+    pub fn watch_lazy(&self) -> LazyDirect<T>
+    where
+        T: Default,
+    {
+        LazyDirect {
+            epoch: self.shared.state().epoch,
+            shared: Arc::downgrade(&self.shared),
+        }
+    }
+
     /// Returns the currently stored value.
     pub fn get(&self) -> T {
         self.shared.get()
@@ -389,6 +403,48 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         };
         self.state = ready!(shared.poll_updated(cx, self.state.epoch));
         Poll::Ready(Ok(self.state.value.clone()))
+    }
+}
+
+/// A lazy direct observer of a [`Watchable`] value.
+///
+/// Other than [`Direct`] it does not store the current value. It needs `T` to implement [`Default`].
+/// If the watchable is dropped, [`Self::get`] will return `T::default()`.
+///
+/// This type is mainly used via the [`Watcher`] interface.
+#[derive(Debug, Clone)]
+pub struct LazyDirect<T> {
+    epoch: u64,
+    shared: Weak<Shared<T>>,
+}
+
+impl<T: Clone + Default + Eq> Watcher for LazyDirect<T> {
+    type Value = T;
+
+    fn get(&mut self) -> Self::Value {
+        if let Some(shared) = self.shared.upgrade() {
+            let state = shared.state();
+            self.epoch = state.epoch;
+            state.value
+        } else {
+            T::default()
+        }
+    }
+
+    fn is_connected(&self) -> bool {
+        self.shared.upgrade().is_some()
+    }
+
+    fn poll_updated(
+        &mut self,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Result<Self::Value, Disconnected>> {
+        let Some(shared) = self.shared.upgrade() else {
+            return Poll::Ready(Err(Disconnected));
+        };
+        let state = ready!(shared.poll_updated(cx, self.epoch));
+        self.epoch = state.epoch;
+        Poll::Ready(Ok(state.value))
     }
 }
 
@@ -1213,5 +1269,24 @@ mod tests {
             println!("Reader {}: saw values {:?}", task_id, values);
             assert!(!values.is_empty());
         }
+    }
+
+    #[test]
+    fn test_lazy_direct() {
+        let a = Watchable::new(1u8);
+        let mut w1 = a.watch_lazy();
+        let mut w2 = a.watch_lazy();
+        assert_eq!(w1.get(), 1u8);
+        assert_eq!(w2.get(), 1u8);
+        a.set(2u8).unwrap();
+        assert_eq!(w1.get(), 2u8);
+        assert_eq!(w2.get(), 2u8);
+        let mut s1 = w1.stream_updates_only();
+        a.set(3u8).unwrap();
+        assert_eq!(n0_future::future::now_or_never(s1.next()), Some(Some(3u8)));
+        assert_eq!(w2.get(), 3u8);
+        drop(a);
+        assert_eq!(n0_future::future::now_or_never(s1.next()), Some(None));
+        assert_eq!(w2.get(), 0u8);
     }
 }
