@@ -193,6 +193,15 @@ impl<T: Clone + Eq> Watchable<T> {
         }
     }
 
+    /// Creates a [`WeakWatcher`], which is a weak reference to the watchable's shared state.
+    ///
+    /// It has the size of a single pointer, and can be upgraded to a [`Direct`] or [`LazyDirect`].
+    pub fn weak_watcher(&self) -> WeakWatcher<T> {
+        WeakWatcher {
+            shared: Arc::downgrade(&self.shared),
+        }
+    }
+
     /// Returns the currently stored value.
     pub fn get(&self) -> T {
         self.shared.get()
@@ -368,6 +377,39 @@ pub trait Watcher: Clone {
     /// updates, and yields both watcher's items together when that happens.
     fn or<W: Watcher>(self, other: W) -> (Self, W) {
         (self, other)
+    }
+}
+
+/// A weak reference to a watchable value that can be upgraded to a full watcher later.
+#[derive(Debug, Clone)]
+pub struct WeakWatcher<T> {
+    shared: Weak<Shared<T>>,
+}
+
+impl<T: Clone + Eq> WeakWatcher<T> {
+    /// Upgrade to a [`Direct`] watcher, allowing to observe the value.
+    ///
+    /// Returns `None` if the underlying [`Watchable`] has been dropped.
+    pub fn upgrade(&self) -> Option<Direct<T>> {
+        let shared = self.shared.upgrade()?;
+        let state = shared.state();
+        Some(Direct {
+            state,
+            shared: self.shared.clone(),
+        })
+    }
+}
+
+impl<T: Clone + Default + Eq> WeakWatcher<T> {
+    /// Upgrade to a [`LazyDirect`] watcher, allowing to observe the value.
+    ///
+    /// The [`LazyDirect`] fetches the value on demand, and thus `lazy_upgrade` succeeds
+    /// even if the underlying watchable has been dropped.
+    pub fn upgrade_lazy(&self) -> LazyDirect<T> {
+        LazyDirect {
+            epoch: 0,
+            shared: self.shared.clone(),
+        }
     }
 }
 
