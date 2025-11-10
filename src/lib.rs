@@ -80,7 +80,7 @@ use std::{
     collections::VecDeque,
     future::Future,
     pin::Pin,
-    sync::{Arc, Weak},
+    sync::{Arc, RwLockReadGuard, Weak},
     task::{self, ready, Poll, Waker},
 };
 
@@ -174,7 +174,7 @@ impl<T: Clone + Eq> Watchable<T> {
     /// Creates a [`Direct`] [`Watcher`], allowing the value to be observed, but not modified.
     pub fn watch(&self) -> Direct<T> {
         Direct {
-            state: self.shared.state(),
+            state: self.shared.state().clone(),
             shared: Arc::downgrade(&self.shared),
         }
     }
@@ -382,7 +382,10 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
 
     fn get(&mut self) -> Self::Value {
         if let Some(shared) = self.shared.upgrade() {
-            self.state = shared.state();
+            let state = shared.state();
+            if state.epoch > self.state.epoch {
+                self.state = state.clone();
+            }
         }
         self.state.value.clone()
     }
@@ -740,18 +743,17 @@ impl<T: Default> Default for State<T> {
 }
 
 impl<T: Clone> Shared<T> {
-    /// Returns the value, initialized or not.
     fn get(&self) -> T {
         self.state.read().expect("poisoned").value.clone()
     }
 
-    fn state(&self) -> State<T> {
-        self.state.read().expect("poisoned").clone()
+    fn state(&self) -> RwLockReadGuard<'_, State<T>> {
+        self.state.read().expect("poisoned")
     }
 
     fn poll_updated(&self, cx: &mut task::Context<'_>, last_epoch: u64) -> Poll<State<T>> {
         {
-            let state = self.state.read().expect("poisoned");
+            let state = self.state();
 
             // We might get spurious wakeups due to e.g. a second-to-last Watchable being dropped.
             // This makes sure we don't accidentally return an update that's not actually an update.
@@ -770,7 +772,7 @@ impl<T: Clone> Shared<T> {
 
         // We check for an update again to prevent races between putting in wakers and looking for updates.
         {
-            let state = self.state.read().expect("poisoned");
+            let state = self.state();
 
             if last_epoch < state.epoch {
                 return Poll::Ready(state.clone());
