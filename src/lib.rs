@@ -247,7 +247,7 @@ pub trait Watcher: Clone {
     /// The default implementation for this is simply
     /// ```ignore
     /// fn get(&mut self) -> Self::Value {
-    ///     self.to_latest();
+    ///     self.update();
     ///     self.peek().clone()
     /// }
     /// ```
@@ -267,7 +267,7 @@ pub trait Watcher: Clone {
     ///
     /// Watchers keep track of the "latest known" value they fetched.
     /// Calling this won't update the latest value, unlike [`Watcher::get`] or
-    /// [`Watcher::to_latest`].
+    /// [`Watcher::update`].
     ///
     /// This can be useful if you want to avoid copying out the internal value
     /// frequently like what [`Watcher::get`] will end up doing.
