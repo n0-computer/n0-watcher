@@ -380,8 +380,8 @@ pub trait Watcher: Clone {
 
     /// Returns a watcher that updates every time this or the other watcher
     /// updates, and yields both watcher's items together when that happens.
-    fn or<W: Watcher>(self, other: W) -> Or<Self, W> {
-        Or::new(self, other)
+    fn or<W: Watcher>(self, other: W) -> Tuple<Self, W> {
+        Tuple::new(self, other)
     }
 }
 
@@ -441,12 +441,12 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Or<S: Watcher, T: Watcher> {
+pub struct Tuple<S: Watcher, T: Watcher> {
     inner: (S, T),
     current: (S::Value, T::Value),
 }
 
-impl<S: Watcher, T: Watcher> Or<S, T> {
+impl<S: Watcher, T: Watcher> Tuple<S, T> {
     pub fn new(mut s: S, mut t: T) -> Self {
         let current = (s.get(), t.get());
         Self {
@@ -456,7 +456,7 @@ impl<S: Watcher, T: Watcher> Or<S, T> {
     }
 }
 
-impl<S: Watcher, T: Watcher> Watcher for Or<S, T> {
+impl<S: Watcher, T: Watcher> Watcher for Tuple<S, T> {
     type Value = (S::Value, T::Value);
 
     fn get(&mut self) -> Self::Value {
@@ -497,12 +497,12 @@ impl<S: Watcher, T: Watcher> Watcher for Or<S, T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Or3<S: Watcher, T: Watcher, U: Watcher> {
+pub struct Triple<S: Watcher, T: Watcher, U: Watcher> {
     inner: (S, T, U),
     current: (S::Value, T::Value, U::Value),
 }
 
-impl<S: Watcher, T: Watcher, U: Watcher> Or3<S, T, U> {
+impl<S: Watcher, T: Watcher, U: Watcher> Triple<S, T, U> {
     pub fn new(mut s: S, mut t: T, mut u: U) -> Self {
         let current = (s.get(), t.get(), u.get());
         Self {
@@ -512,7 +512,7 @@ impl<S: Watcher, T: Watcher, U: Watcher> Or3<S, T, U> {
     }
 }
 
-impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Or3<S, T, U> {
+impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Triple<S, T, U> {
     type Value = (S::Value, T::Value, U::Value);
 
     fn get(&mut self) -> Self::Value {
@@ -1281,7 +1281,7 @@ mod tests {
         let b = Watchable::new(2u8);
         let c = Watchable::new(3u8);
 
-        let mut combined = Or3::new(a.watch(), b.watch(), c.watch());
+        let mut combined = Triple::new(a.watch(), b.watch(), c.watch());
 
         assert_eq!(combined.get(), (1, 2, 3));
 
