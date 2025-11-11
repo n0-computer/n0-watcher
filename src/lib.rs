@@ -357,8 +357,8 @@ pub trait Watcher: Clone {
 
     /// Returns a watcher that updates every time this or the other watcher
     /// updates, and yields both watcher's items together when that happens.
-    fn or<W: Watcher>(self, other: W) -> (Self, W) {
-        (self, other)
+    fn or<W: Watcher>(self, other: W) -> Combine<Self, W> {
+        Combine::new(self, other)
     }
 }
 
