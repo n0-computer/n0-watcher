@@ -247,7 +247,7 @@
 <a href=#247 id=247 data-nosnippet>247</a>    /// The default implementation for this is simply
 <a href=#248 id=248 data-nosnippet>248</a>    /// ```ignore
 <a href=#249 id=249 data-nosnippet>249</a>    /// fn get(&amp;mut self) -&gt; Self::Value {
-<a href=#250 id=250 data-nosnippet>250</a>    ///     self.to_latest();
+<a href=#250 id=250 data-nosnippet>250</a>    ///     self.update();
 <a href=#251 id=251 data-nosnippet>251</a>    ///     self.peek().clone()
 <a href=#252 id=252 data-nosnippet>252</a>    /// }
 <a href=#253 id=253 data-nosnippet>253</a>    /// ```
@@ -267,7 +267,7 @@
 <a href=#267 id=267 data-nosnippet>267</a>    ///
 <a href=#268 id=268 data-nosnippet>268</a>    /// Watchers keep track of the "latest known" value they fetched.
 <a href=#269 id=269 data-nosnippet>269</a>    /// Calling this won't update the latest value, unlike [`Watcher::get`] or
-<a href=#270 id=270 data-nosnippet>270</a>    /// [`Watcher::to_latest`].
+<a href=#270 id=270 data-nosnippet>270</a>    /// [`Watcher::update`].
 <a href=#271 id=271 data-nosnippet>271</a>    ///
 <a href=#272 id=272 data-nosnippet>272</a>    /// This can be useful if you want to avoid copying out the internal value
 <a href=#273 id=273 data-nosnippet>273</a>    /// frequently like what [`Watcher::get`] will end up doing.

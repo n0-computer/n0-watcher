@@ -53,7 +53,7 @@ at the <a href="struct.Watchable.html" title="struct n0_watcher::Watchable"><cod
 </div></details><details class="toggle method-toggle" open><summary><section id="tymethod.peek" class="method"><a class="src rightside" href="../src/n0_watcher/lib.rs.html#274">Source</a><h4 class="code-header">fn <a href="#tymethod.peek" class="fn">peek</a>(&amp;self) -&gt; &amp;Self::<a class="associatedtype" href="trait.Watcher.html#associatedtype.Value" title="type n0_watcher::Watcher::Value">Value</a></h4></section></summary><div class="docblock"><p>Returns a reference to the value currently stored in the watcher.</p>
 <p>Watchers keep track of the “latest known” value they fetched.
 Calling this won’t update the latest value, unlike <a href="trait.Watcher.html#method.get" title="method n0_watcher::Watcher::get"><code>Watcher::get</code></a> or
-[<code>Watcher::to_latest</code>].</p>
+<a href="trait.Watcher.html#tymethod.update" title="method n0_watcher::Watcher::update"><code>Watcher::update</code></a>.</p>
 <p>This can be useful if you want to avoid copying out the internal value
 frequently like what <a href="trait.Watcher.html#method.get" title="method n0_watcher::Watcher::get"><code>Watcher::get</code></a> will end up doing.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="tymethod.is_connected" class="method"><a class="src rightside" href="../src/n0_watcher/lib.rs.html#279">Source</a><h4 class="code-header">fn <a href="#tymethod.is_connected" class="fn">is_connected</a>(&amp;self) -&gt; <a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.bool.html">bool</a></h4></section></summary><div class="docblock"><p>Whether this watcher is still connected to all of its underlying <a href="struct.Watchable.html" title="struct n0_watcher::Watchable"><code>Watchable</code></a>s.</p>
@@ -71,7 +71,7 @@ that was set on the watchable before it was dropped.</p>
 <p>The default implementation for this is simply</p>
 
 <div class="example-wrap ignore"><a href="#" class="tooltip" title="This example is not tested">ⓘ</a><pre class="rust rust-example-rendered"><code><span class="kw">fn </span>get(<span class="kw-2">&amp;mut </span><span class="self">self</span>) -&gt; <span class="self">Self</span>::Value {
-    <span class="self">self</span>.to_latest();
+    <span class="self">self</span>.update();
     <span class="self">self</span>.peek().clone()
 }</code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="method.updated" class="method"><a class="src rightside" href="../src/n0_watcher/lib.rs.html#294-296">Source</a><h4 class="code-header">fn <a href="#method.updated" class="fn">updated</a>(&amp;mut self) -&gt; <a class="struct" href="struct.NextFut.html" title="struct n0_watcher::NextFut">NextFut</a>&lt;'_, Self&gt; <a href="#" class="tooltip" data-notable-ty="NextFut&lt;&#39;_, Self&gt;">ⓘ</a></h4></section></summary><div class="docblock"><p>Returns a future completing with <code>Ok(value)</code> once a new value is set, or with
 <a href="struct.Disconnected.html" title="struct n0_watcher::Disconnected"><code>Err(Disconnected)</code></a> if the connected <a href="struct.Watchable.html" title="struct n0_watcher::Watchable"><code>Watchable</code></a> was dropped.</p>
