@@ -237,17 +237,40 @@ pub trait Watcher: Clone {
     /// not, so we can notify or not notify accordingly.
     type Value: Clone + Eq;
 
-    /// Returns the current state of the underlying value.
+    /// Updates the watcher to the latest value and returns that value.
     ///
-    /// If any of the underlying [`Watchable`] values has been dropped, then this
+    /// If any of the underlying [`Watchable`] values have been dropped, then this
     /// might return an outdated value for that watchable, specifically, the latest
     /// value that was fetched for that watchable, as opposed to the latest value
     /// that was set on the watchable before it was dropped.
-    fn get(&mut self) -> Self::Value;
+    ///
+    /// The default implementation for this is simply
+    /// ```ignore
+    /// fn get(&mut self) -> Self::Value {
+    ///     self.to_latest();
+    ///     self.peek().clone()
+    /// }
+    /// ```
+    fn get(&mut self) -> Self::Value {
+        self.to_latest();
+        self.peek().clone()
+    }
 
+    /// Updates the watcher to the latest value and returns whether it changed.
+    ///
+    /// Watchers keep track of the "latest known" value they fetched.
+    /// This function updates that internal value by looking up the latest value
+    /// at the [`Watchable`]\(s\) that this watcher is linked to.
     fn to_latest(&mut self) -> bool;
 
-    /// Returns a reference to the underlying value.
+    /// Returns a reference to the value currently stored in the watcher.
+    ///
+    /// Watchers keep track of the "latest known" value they fetched.
+    /// Calling this won't update the latest value, unlike [`Watcher::get`] or
+    /// [`Watcher::to_latest`].
+    ///
+    /// This can be useful if you want to avoid copying out the internal value
+    /// frequently like what [`Watcher::get`] will end up doing.
     fn peek(&self) -> &Self::Value;
 
     /// Whether this watcher is still connected to all of its underlying [`Watchable`]s.
@@ -357,8 +380,8 @@ pub trait Watcher: Clone {
 
     /// Returns a watcher that updates every time this or the other watcher
     /// updates, and yields both watcher's items together when that happens.
-    fn or<W: Watcher>(self, other: W) -> Combine<Self, W> {
-        Combine::new(self, other)
+    fn or<W: Watcher>(self, other: W) -> Or<Self, W> {
+        Or::new(self, other)
     }
 }
 
@@ -418,12 +441,12 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Combine<S: Watcher, T: Watcher> {
+pub struct Or<S: Watcher, T: Watcher> {
     inner: (S, T),
     current: (S::Value, T::Value),
 }
 
-impl<S: Watcher, T: Watcher> Combine<S, T> {
+impl<S: Watcher, T: Watcher> Or<S, T> {
     pub fn new(mut s: S, mut t: T) -> Self {
         let current = (s.get(), t.get());
         Self {
@@ -433,7 +456,7 @@ impl<S: Watcher, T: Watcher> Combine<S, T> {
     }
 }
 
-impl<S: Watcher, T: Watcher> Watcher for Combine<S, T> {
+impl<S: Watcher, T: Watcher> Watcher for Or<S, T> {
     type Value = (S::Value, T::Value);
 
     fn get(&mut self) -> Self::Value {
@@ -474,12 +497,12 @@ impl<S: Watcher, T: Watcher> Watcher for Combine<S, T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct Combine3<S: Watcher, T: Watcher, U: Watcher> {
+pub struct Or3<S: Watcher, T: Watcher, U: Watcher> {
     inner: (S, T, U),
     current: (S::Value, T::Value, U::Value),
 }
 
-impl<S: Watcher, T: Watcher, U: Watcher> Combine3<S, T, U> {
+impl<S: Watcher, T: Watcher, U: Watcher> Or3<S, T, U> {
     pub fn new(mut s: S, mut t: T, mut u: U) -> Self {
         let current = (s.get(), t.get(), u.get());
         Self {
@@ -489,7 +512,7 @@ impl<S: Watcher, T: Watcher, U: Watcher> Combine3<S, T, U> {
     }
 }
 
-impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Combine3<S, T, U> {
+impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Or3<S, T, U> {
     type Value = (S::Value, T::Value, U::Value);
 
     fn get(&mut self) -> Self::Value {
@@ -649,20 +672,18 @@ pub struct Map<W: Watcher, T: Clone + Eq> {
 impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
     type Value = T;
 
-    fn get(&mut self) -> Self::Value {
-        if self.to_latest() {
-            let new = (self.map)(self.watcher.get());
-            if new != self.current {
-                self.current = new.clone();
-            }
-            new
-        } else {
-            self.current.clone()
-        }
-    }
-
     fn to_latest(&mut self) -> bool {
-        self.watcher.to_latest()
+        if self.watcher.to_latest() {
+            let new = (self.map)(self.watcher.peek().clone());
+            if new != self.current {
+                self.current = new;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 
     fn peek(&self) -> &Self::Value {
@@ -1260,7 +1281,7 @@ mod tests {
         let b = Watchable::new(2u8);
         let c = Watchable::new(3u8);
 
-        let mut combined = Combine3::new(a.watch(), b.watch(), c.watch());
+        let mut combined = Or3::new(a.watch(), b.watch(), c.watch());
 
         assert_eq!(combined.get(), (1, 2, 3));
 
