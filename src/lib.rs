@@ -397,16 +397,6 @@ pub struct Direct<T> {
 impl<T: Clone + Eq> Watcher for Direct<T> {
     type Value = T;
 
-    fn get(&mut self) -> Self::Value {
-        if let Some(shared) = self.shared.upgrade() {
-            let state = shared.state();
-            if state.epoch > self.state.epoch {
-                self.state = state.clone();
-            }
-        }
-        self.state.value.clone()
-    }
-
     fn update(&mut self) -> bool {
         let Some(shared) = self.shared.upgrade() else {
             return false;
@@ -459,17 +449,15 @@ impl<S: Watcher, T: Watcher> Tuple<S, T> {
 impl<S: Watcher, T: Watcher> Watcher for Tuple<S, T> {
     type Value = (S::Value, T::Value);
 
-    fn get(&mut self) -> Self::Value {
-        if self.update() {
-            self.current = (self.inner.0.peek().clone(), self.inner.1.peek().clone());
-        }
-        self.current.clone()
-    }
-
     fn update(&mut self) -> bool {
+        // We need to update all watchers! So don't early-return
         let s_updated = self.inner.0.update();
         let t_updated = self.inner.1.update();
-        s_updated || t_updated
+        let updated = s_updated || t_updated;
+        if updated {
+            self.current = (self.inner.0.peek().clone(), self.inner.1.peek().clone());
+        }
+        updated
     }
 
     fn peek(&self) -> &Self::Value {
@@ -515,22 +503,20 @@ impl<S: Watcher, T: Watcher, U: Watcher> Triple<S, T, U> {
 impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Triple<S, T, U> {
     type Value = (S::Value, T::Value, U::Value);
 
-    fn get(&mut self) -> Self::Value {
-        if self.update() {
+    fn update(&mut self) -> bool {
+        // We need to update all watchers! So don't early-return
+        let s_updated = self.inner.0.update();
+        let t_updated = self.inner.1.update();
+        let u_updated = self.inner.2.update();
+        let updated = s_updated || t_updated || u_updated;
+        if updated {
             self.current = (
                 self.inner.0.peek().clone(),
                 self.inner.1.peek().clone(),
                 self.inner.2.peek().clone(),
             );
         }
-        self.current.clone()
-    }
-
-    fn update(&mut self) -> bool {
-        let s_updated = self.inner.0.update();
-        let t_updated = self.inner.1.update();
-        let u_updated = self.inner.2.update();
-        s_updated || t_updated || u_updated
+        updated
     }
 
     fn peek(&self) -> &Self::Value {
@@ -591,25 +577,20 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Join<T, W> {
 impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
     type Value = Vec<T>;
 
-    fn get(&mut self) -> Self::Value {
-        if self.update() {
+    fn update(&mut self) -> bool {
+        let mut any_updated = false;
+        for watcher in self.watchers.iter_mut() {
+            // We need to update all watchers! So don't early-return
+            any_updated |= watcher.update();
+        }
+        if any_updated {
             let mut out = Vec::with_capacity(self.current.len());
             for watcher in self.watchers.iter() {
                 out.push(watcher.peek().clone());
             }
             if self.current != out {
-                self.current = out.clone();
+                self.current = out;
             }
-            out
-        } else {
-            self.current.clone()
-        }
-    }
-
-    fn update(&mut self) -> bool {
-        let mut any_updated = false;
-        for watcher in self.watchers.iter_mut() {
-            any_updated |= watcher.update();
         }
         any_updated
     }
