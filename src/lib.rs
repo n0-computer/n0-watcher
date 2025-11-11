@@ -248,7 +248,7 @@ pub trait Watcher: Clone {
     fn to_latest(&mut self) -> bool;
 
     /// Returns a reference to the underlying value.
-    fn get_ref(&self) -> &Self::Value;
+    fn peek(&self) -> &Self::Value;
 
     /// Whether this watcher is still connected to all of its underlying [`Watchable`]s.
     ///
@@ -397,7 +397,7 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         }
     }
 
-    fn get_ref(&self) -> &Self::Value {
+    fn peek(&self) -> &Self::Value {
         &self.state.value
     }
 
@@ -438,10 +438,7 @@ impl<S: Watcher, T: Watcher> Watcher for Combine<S, T> {
 
     fn get(&mut self) -> Self::Value {
         if self.to_latest() {
-            self.current = (
-                self.inner.0.get_ref().clone(),
-                self.inner.1.get_ref().clone(),
-            );
+            self.current = (self.inner.0.peek().clone(), self.inner.1.peek().clone());
         }
         self.current.clone()
     }
@@ -452,7 +449,7 @@ impl<S: Watcher, T: Watcher> Watcher for Combine<S, T> {
         s_updated || t_updated
     }
 
-    fn get_ref(&self) -> &Self::Value {
+    fn peek(&self) -> &Self::Value {
         &self.current
     }
 
@@ -498,9 +495,9 @@ impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Combine3<S, T, U> {
     fn get(&mut self) -> Self::Value {
         if self.to_latest() {
             self.current = (
-                self.inner.0.get_ref().clone(),
-                self.inner.1.get_ref().clone(),
-                self.inner.2.get_ref().clone(),
+                self.inner.0.peek().clone(),
+                self.inner.1.peek().clone(),
+                self.inner.2.peek().clone(),
             );
         }
         self.current.clone()
@@ -513,7 +510,7 @@ impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Combine3<S, T, U> {
         s_updated || t_updated || u_updated
     }
 
-    fn get_ref(&self) -> &Self::Value {
+    fn peek(&self) -> &Self::Value {
         &self.current
     }
 
@@ -575,7 +572,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
         if self.to_latest() {
             let mut out = Vec::with_capacity(self.current.len());
             for watcher in self.watchers.iter() {
-                out.push(watcher.get_ref().clone());
+                out.push(watcher.peek().clone());
             }
             if self.current != out {
                 self.current = out.clone();
@@ -594,7 +591,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
         any_updated
     }
 
-    fn get_ref(&self) -> &Self::Value {
+    fn peek(&self) -> &Self::Value {
         &self.current
     }
 
@@ -668,7 +665,7 @@ impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
         self.watcher.to_latest()
     }
 
-    fn get_ref(&self) -> &Self::Value {
+    fn peek(&self) -> &Self::Value {
         &self.current
     }
 
@@ -1358,26 +1355,26 @@ mod tests {
         let mut wa = a.watch();
 
         assert_eq!(wa.get(), vec![1, 2, 3]);
-        assert_eq!(wa.get_ref(), &vec![1, 2, 3]);
+        assert_eq!(wa.peek(), &vec![1, 2, 3]);
 
         let mut wa_map = wa.map(|a| a.into_iter().map(|a| a * 2).collect::<Vec<_>>());
 
         assert_eq!(wa_map.get(), vec![2, 4, 6]);
-        assert_eq!(wa_map.get_ref(), &vec![2, 4, 6]);
+        assert_eq!(wa_map.peek(), &vec![2, 4, 6]);
 
         let mut wb = a.watch();
 
         assert_eq!(wb.get(), vec![1, 2, 3]);
-        assert_eq!(wb.get_ref(), &vec![1, 2, 3]);
+        assert_eq!(wb.peek(), &vec![1, 2, 3]);
 
         let mut wb_map = wb.map(|a| a.into_iter().map(|a| a * 2).collect::<Vec<_>>());
 
         assert_eq!(wb_map.get(), vec![2, 4, 6]);
-        assert_eq!(wb_map.get_ref(), &vec![2, 4, 6]);
+        assert_eq!(wb_map.peek(), &vec![2, 4, 6]);
 
         let mut w_join = Join::new([wa_map, wb_map].into_iter());
 
         assert_eq!(w_join.get(), vec![vec![2, 4, 6], vec![2, 4, 6]]);
-        assert_eq!(w_join.get_ref(), &vec![vec![2, 4, 6], vec![2, 4, 6]]);
+        assert_eq!(w_join.peek(), &vec![vec![2, 4, 6], vec![2, 4, 6]]);
     }
 }
