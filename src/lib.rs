@@ -245,6 +245,8 @@ pub trait Watcher: Clone {
     /// that was set on the watchable before it was dropped.
     fn get(&mut self) -> Self::Value;
 
+    fn to_latest(&mut self) -> bool;
+
     /// Returns a reference to the underlying value.
     fn get_ref(&self) -> &Self::Value;
 
@@ -382,6 +384,19 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
         self.state.value.clone()
     }
 
+    fn to_latest(&mut self) -> bool {
+        let Some(shared) = self.shared.upgrade() else {
+            return false;
+        };
+        let state = shared.state();
+        if state.epoch > self.state.epoch {
+            self.state = state.clone();
+            true
+        } else {
+            false
+        }
+    }
+
     fn get_ref(&self) -> &Self::Value {
         &self.state.value
     }
@@ -422,8 +437,19 @@ impl<S: Watcher, T: Watcher> Watcher for Combine<S, T> {
     type Value = (S::Value, T::Value);
 
     fn get(&mut self) -> Self::Value {
-        self.current = (self.inner.0.get(), self.inner.1.get());
+        if self.to_latest() {
+            self.current = (
+                self.inner.0.get_ref().clone(),
+                self.inner.1.get_ref().clone(),
+            );
+        }
         self.current.clone()
+    }
+
+    fn to_latest(&mut self) -> bool {
+        let s_updated = self.inner.0.to_latest();
+        let t_updated = self.inner.1.to_latest();
+        s_updated || t_updated
     }
 
     fn get_ref(&self) -> &Self::Value {
@@ -470,8 +496,21 @@ impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Combine3<S, T, U> {
     type Value = (S::Value, T::Value, U::Value);
 
     fn get(&mut self) -> Self::Value {
-        self.current = (self.inner.0.get(), self.inner.1.get(), self.inner.2.get());
+        if self.to_latest() {
+            self.current = (
+                self.inner.0.get_ref().clone(),
+                self.inner.1.get_ref().clone(),
+                self.inner.2.get_ref().clone(),
+            );
+        }
         self.current.clone()
+    }
+
+    fn to_latest(&mut self) -> bool {
+        let s_updated = self.inner.0.to_latest();
+        let t_updated = self.inner.1.to_latest();
+        let u_updated = self.inner.2.to_latest();
+        s_updated || t_updated || u_updated
     }
 
     fn get_ref(&self) -> &Self::Value {
@@ -533,16 +572,26 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
     type Value = Vec<T>;
 
     fn get(&mut self) -> Self::Value {
-        let mut out = Vec::with_capacity(self.watchers.len());
-        for watcher in &mut self.watchers {
-            out.push(watcher.get());
+        if self.to_latest() {
+            let mut out = Vec::with_capacity(self.current.len());
+            for watcher in self.watchers.iter() {
+                out.push(watcher.get_ref().clone());
+            }
+            if self.current != out {
+                self.current = out.clone();
+            }
+            out
+        } else {
+            self.current.clone()
         }
+    }
 
-        if self.current != out {
-            self.current = out.clone();
+    fn to_latest(&mut self) -> bool {
+        let mut any_updated = false;
+        for watcher in self.watchers.iter_mut() {
+            any_updated |= watcher.to_latest();
         }
-
-        out
+        any_updated
     }
 
     fn get_ref(&self) -> &Self::Value {
@@ -604,11 +653,19 @@ impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
     type Value = T;
 
     fn get(&mut self) -> Self::Value {
-        let new = (self.map)(self.watcher.get());
-        if new != self.current {
-            self.current = new.clone();
+        if self.to_latest() {
+            let new = (self.map)(self.watcher.get());
+            if new != self.current {
+                self.current = new.clone();
+            }
+            new
+        } else {
+            self.current.clone()
         }
-        new
+    }
+
+    fn to_latest(&mut self) -> bool {
+        self.watcher.to_latest()
     }
 
     fn get_ref(&self) -> &Self::Value {
