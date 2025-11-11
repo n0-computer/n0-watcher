@@ -237,10 +237,6 @@ pub trait Watcher: Clone {
     /// not, so we can notify or not notify accordingly.
     type Value: Clone + Eq;
 
-    type RefValue<'a>
-    where
-        Self: 'a;
-
     /// Returns the current state of the underlying value.
     ///
     /// If any of the underlying [`Watchable`] values has been dropped, then this
@@ -250,7 +246,7 @@ pub trait Watcher: Clone {
     fn get(&mut self) -> Self::Value;
 
     /// Returns a reference to the underlying value.
-    fn get_ref(&self) -> Self::RefValue<'_>;
+    fn get_ref(&self) -> &Self::Value;
 
     /// Whether this watcher is still connected to all of its underlying [`Watchable`]s.
     ///
@@ -375,10 +371,6 @@ pub struct Direct<T> {
 
 impl<T: Clone + Eq> Watcher for Direct<T> {
     type Value = T;
-    type RefValue<'a>
-        = &'a T
-    where
-        Self: 'a;
 
     fn get(&mut self) -> Self::Value {
         if let Some(shared) = self.shared.upgrade() {
@@ -410,66 +402,93 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
     }
 }
 
-impl<S: Watcher, T: Watcher> Watcher for (S, T) {
-    type Value = (S::Value, T::Value);
-    type RefValue<'a>
-        = (S::RefValue<'a>, T::RefValue<'a>)
-    where
-        Self: 'a;
+#[derive(Debug, Clone)]
+pub struct Combine<S: Watcher, T: Watcher> {
+    inner: (S, T),
+    current: (S::Value, T::Value),
+}
 
-    fn get(&mut self) -> Self::Value {
-        (self.0.get(), self.1.get())
-    }
-
-    fn get_ref(&self) -> Self::RefValue<'_> {
-        (self.0.get_ref(), self.1.get_ref())
-    }
-
-    fn is_connected(&self) -> bool {
-        self.0.is_connected() && self.1.is_connected()
-    }
-
-    fn poll_updated(
-        &mut self,
-        cx: &mut task::Context<'_>,
-    ) -> Poll<Result<Self::Value, Disconnected>> {
-        let poll_0 = self.0.poll_updated(cx)?;
-        let poll_1 = self.1.poll_updated(cx)?;
-        match (poll_0, poll_1) {
-            (Poll::Ready(s), Poll::Ready(t)) => Poll::Ready(Ok((s, t))),
-            (Poll::Ready(s), Poll::Pending) => Poll::Ready(Ok((s, self.1.get()))),
-            (Poll::Pending, Poll::Ready(t)) => Poll::Ready(Ok((self.0.get(), t))),
-            (Poll::Pending, Poll::Pending) => Poll::Pending,
+impl<S: Watcher, T: Watcher> Combine<S, T> {
+    pub fn new(mut s: S, mut t: T) -> Self {
+        let current = (s.get(), t.get());
+        Self {
+            inner: (s, t),
+            current,
         }
     }
 }
 
-impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
-    type Value = (S::Value, T::Value, U::Value);
-    type RefValue<'a>
-        = (S::RefValue<'a>, T::RefValue<'a>, U::RefValue<'a>)
-    where
-        Self: 'a;
+impl<S: Watcher, T: Watcher> Watcher for Combine<S, T> {
+    type Value = (S::Value, T::Value);
 
     fn get(&mut self) -> Self::Value {
-        (self.0.get(), self.1.get(), self.2.get())
+        self.current = (self.inner.0.get(), self.inner.1.get());
+        self.current.clone()
     }
 
-    fn get_ref(&self) -> Self::RefValue<'_> {
-        (self.0.get_ref(), self.1.get_ref(), self.2.get_ref())
+    fn get_ref(&self) -> &Self::Value {
+        &self.current
     }
 
     fn is_connected(&self) -> bool {
-        self.0.is_connected() && self.1.is_connected() && self.2.is_connected()
+        self.inner.0.is_connected() && self.inner.1.is_connected()
     }
 
     fn poll_updated(
         &mut self,
         cx: &mut task::Context<'_>,
     ) -> Poll<Result<Self::Value, Disconnected>> {
-        let poll_0 = self.0.poll_updated(cx)?;
-        let poll_1 = self.1.poll_updated(cx)?;
-        let poll_2 = self.2.poll_updated(cx)?;
+        let poll_0 = self.inner.0.poll_updated(cx)?;
+        let poll_1 = self.inner.1.poll_updated(cx)?;
+        self.current = match (poll_0, poll_1) {
+            (Poll::Ready(s), Poll::Ready(t)) => (s, t),
+            (Poll::Ready(s), Poll::Pending) => (s, self.inner.1.get()),
+            (Poll::Pending, Poll::Ready(t)) => (self.inner.0.get(), t),
+            (Poll::Pending, Poll::Pending) => return Poll::Pending,
+        };
+        Poll::Ready(Ok(self.current.clone()))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Combine3<S: Watcher, T: Watcher, U: Watcher> {
+    inner: (S, T, U),
+    current: (S::Value, T::Value, U::Value),
+}
+
+impl<S: Watcher, T: Watcher, U: Watcher> Combine3<S, T, U> {
+    pub fn new(mut s: S, mut t: T, mut u: U) -> Self {
+        let current = (s.get(), t.get(), u.get());
+        Self {
+            inner: (s, t, u),
+            current,
+        }
+    }
+}
+
+impl<S: Watcher, T: Watcher, U: Watcher> Watcher for Combine3<S, T, U> {
+    type Value = (S::Value, T::Value, U::Value);
+
+    fn get(&mut self) -> Self::Value {
+        self.current = (self.inner.0.get(), self.inner.1.get(), self.inner.2.get());
+        self.current.clone()
+    }
+
+    fn get_ref(&self) -> &Self::Value {
+        &self.current
+    }
+
+    fn is_connected(&self) -> bool {
+        self.inner.0.is_connected() && self.inner.1.is_connected() && self.inner.2.is_connected()
+    }
+
+    fn poll_updated(
+        &mut self,
+        cx: &mut task::Context<'_>,
+    ) -> Poll<Result<Self::Value, Disconnected>> {
+        let poll_0 = self.inner.0.poll_updated(cx)?;
+        let poll_1 = self.inner.1.poll_updated(cx)?;
+        let poll_2 = self.inner.2.poll_updated(cx)?;
 
         if poll_0.is_pending() && poll_1.is_pending() && poll_2.is_pending() {
             Poll::Pending
@@ -481,10 +500,11 @@ impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U) {
                 }
             }
 
-            let s = to_option(poll_0).unwrap_or_else(|| self.0.get());
-            let t = to_option(poll_1).unwrap_or_else(|| self.1.get());
-            let u = to_option(poll_2).unwrap_or_else(|| self.2.get());
-            Poll::Ready(Ok((s, t, u)))
+            let s = to_option(poll_0).unwrap_or_else(|| self.inner.0.get());
+            let t = to_option(poll_1).unwrap_or_else(|| self.inner.1.get());
+            let u = to_option(poll_2).unwrap_or_else(|| self.inner.2.get());
+            self.current = (s, t, u);
+            Poll::Ready(Ok(self.current.clone()))
         }
     }
 }
@@ -495,6 +515,7 @@ pub struct Join<T: Clone + Eq, W: Watcher<Value = T>> {
     watchers: Vec<W>,
     current: Vec<T>,
 }
+
 impl<T: Clone + Eq, W: Watcher<Value = T>> Join<T, W> {
     /// Joins a set of watchers into a single watcher
     pub fn new(watchers: impl Iterator<Item = W>) -> Self {
@@ -510,10 +531,6 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Join<T, W> {
 
 impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
     type Value = Vec<T>;
-    type RefValue<'a>
-        = &'a Vec<T>
-    where
-        Self: 'a;
 
     fn get(&mut self) -> Self::Value {
         let mut out = Vec::with_capacity(self.watchers.len());
@@ -528,7 +545,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
         out
     }
 
-    fn get_ref(&self) -> Self::RefValue<'_> {
+    fn get_ref(&self) -> &Self::Value {
         &self.current
     }
 
@@ -585,10 +602,6 @@ pub struct Map<W: Watcher, T: Clone + Eq> {
 
 impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
     type Value = T;
-    type RefValue<'a>
-        = &'a T
-    where
-        Self: 'a;
 
     fn get(&mut self) -> Self::Value {
         let new = (self.map)(self.watcher.get());
@@ -598,7 +611,7 @@ impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
         new
     }
 
-    fn get_ref(&self) -> Self::RefValue<'_> {
+    fn get_ref(&self) -> &Self::Value {
         &self.current
     }
 
@@ -613,6 +626,7 @@ impl<W: Watcher, T: Clone + Eq> Watcher for Map<W, T> {
         loop {
             let value = ready!(self.watcher.poll_updated(cx)?);
             let mapped = (self.map)(value);
+            // Prevent updates when the value doesn't change
             if mapped != self.current {
                 self.current = mapped.clone();
                 return Poll::Ready(Ok(mapped));
@@ -1192,7 +1206,7 @@ mod tests {
         let b = Watchable::new(2u8);
         let c = Watchable::new(3u8);
 
-        let mut combined = (a.watch(), b.watch(), c.watch());
+        let mut combined = Combine3::new(a.watch(), b.watch(), c.watch());
 
         assert_eq!(combined.get(), (1, 2, 3));
 
