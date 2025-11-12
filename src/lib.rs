@@ -1352,7 +1352,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ref() {
+    async fn test_peek() {
         let a = Watchable::new(vec![1, 2, 3]);
         let mut wa = a.watch();
 
@@ -1378,5 +1378,89 @@ mod tests {
 
         assert_eq!(w_join.get(), vec![vec![2, 4, 6], vec![2, 4, 6]]);
         assert_eq!(w_join.peek(), &vec![vec![2, 4, 6], vec![2, 4, 6]]);
+    }
+
+    #[tokio::test]
+    async fn test_update_updates_peek() {
+        let value = Watchable::new(42);
+        let mut watcher = value.watch();
+
+        assert_eq!(watcher.peek(), &42);
+        assert!(!watcher.update());
+
+        value.set(50).ok();
+
+        assert_eq!(watcher.peek(), &42); // watcher wasn't updated yet
+        assert!(watcher.update()); // Update returns true, because there was an update
+        assert_eq!(watcher.peek(), &50);
+        assert!(!watcher.update());
+
+        let mut watcher_map = watcher.clone().map(|v| v * 2);
+
+        assert_eq!(watcher_map.peek(), &100);
+        assert!(!watcher_map.update());
+
+        value.set(10).ok();
+
+        assert_eq!(watcher_map.peek(), &100);
+        assert!(watcher_map.update());
+        assert_eq!(watcher_map.peek(), &20);
+        assert!(!watcher_map.update());
+
+        let value2 = Watchable::new(0);
+        let mut watcher_join = Join::new([watcher, value2.watch()].into_iter());
+
+        assert_eq!(watcher_join.peek(), &vec![10, 0]);
+        assert!(!watcher_join.update());
+
+        value.set(0).ok();
+        value2.set(1).ok();
+
+        assert_eq!(watcher_join.peek(), &vec![10, 0]);
+        assert!(watcher_join.update());
+        assert_eq!(watcher_join.peek(), &vec![0, 1]);
+        assert!(!watcher_join.update());
+    }
+
+    #[tokio::test]
+    async fn test_get_updates_peek() {
+        let value = Watchable::new(42);
+        let mut watcher = value.watch();
+
+        assert_eq!(watcher.peek(), &42);
+        assert!(!watcher.update());
+
+        value.set(50).ok();
+
+        assert_eq!(watcher.peek(), &42); // watcher wasn't updated yet
+        assert_eq!(watcher.get(), 50); // Update returns true, because there was an update
+        assert_eq!(watcher.peek(), &50);
+        assert!(!watcher.update());
+
+        let mut watcher_map = watcher.clone().map(|v| v * 2);
+
+        assert_eq!(watcher_map.peek(), &100);
+        assert!(!watcher_map.update());
+
+        value.set(10).ok();
+
+        assert_eq!(watcher_map.peek(), &100);
+        assert_eq!(watcher_map.get(), 20);
+        assert_eq!(watcher_map.peek(), &20);
+        assert!(!watcher_map.update());
+
+        let value2 = Watchable::new(0);
+        let mut watcher_join = Join::new([watcher, value2.watch()].into_iter());
+
+        assert_eq!(watcher_join.peek(), &vec![10, 0]);
+        assert!(!watcher_join.update());
+
+        value.set(0).ok();
+        value2.set(1).ok();
+
+        assert_eq!(watcher_join.peek(), &vec![10, 0]);
+        assert_eq!(watcher_join.get(), vec![0, 1]);
+        assert_eq!(watcher_join.peek(), &vec![0, 1]);
+        assert!(!watcher_join.update());
     }
 }
