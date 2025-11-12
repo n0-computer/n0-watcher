@@ -568,11 +568,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
 
     fn update(&mut self) -> bool {
         let mut any_updated = false;
-        // zip can be slow :(
-        for i in 0..self.watchers.len() {
-            let watcher = &mut self.watchers[i];
-            let value = &mut self.current[i];
-
+        for (value, watcher) in self.current.iter_mut().zip(self.watchers.iter_mut()) {
             if watcher.update() {
                 any_updated = true;
                 *value = watcher.peek().clone();
@@ -591,11 +587,7 @@ impl<T: Clone + Eq, W: Watcher<Value = T>> Watcher for Join<T, W> {
 
     fn poll_updated(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<(), Disconnected>> {
         let mut any_updated = false;
-        // zip can be slow :(
-        for i in 0..self.watchers.len() {
-            let watcher = &mut self.watchers[i];
-            let value = &mut self.current[i];
-
+        for (value, watcher) in self.current.iter_mut().zip(self.watchers.iter_mut()) {
             if watcher.poll_updated(cx)?.is_ready() {
                 any_updated = true;
                 *value = watcher.peek().clone();
@@ -740,7 +732,7 @@ where
             return Poll::Ready(Some(value));
         }
         match self.as_mut().watcher.poll_updated(cx) {
-            Poll::Ready(Ok(())) => Poll::Ready(Some(self.as_mut().watcher.peek().clone())),
+            Poll::Ready(Ok(())) => Poll::Ready(Some(self.as_ref().watcher.peek().clone())),
             Poll::Ready(Err(Disconnected)) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
