@@ -12,6 +12,17 @@ of the channel filling up, but instead you might miss items.
 See [the module documentation][https://docs.rs/n0-watcher] for more information.
 
 
+## Note to Maintainers: Creating a release
+
+- Make sure to have `git-cliff`, `cargo-release` and `cargo-semver-checks` installed.
+- Figure out whether this release is major/minor/patch by running `cargo semver-checks check-release --release-type=major/minor/patch` and see which one fits
+- Use `git-cliff` to generate the changelog
+- Bump the version by major/minor/patch in `Cargo.toml` and create a release prep PR. Make sure to prefix the release prep PR name with `chore(release):`.
+- Review and merge the PR.
+- Run `cargo release` to check if the release would go through well.
+- Run `cargo release --execute` to run the release
+
+
 ## License
 
 Copyright 2025 N0, INC.
