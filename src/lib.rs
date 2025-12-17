@@ -175,7 +175,7 @@ impl<T: Clone + Eq> Watchable<T> {
     pub fn watch(&self) -> Direct<T> {
         Direct {
             state: self.shared.state().clone(),
-            shared: Arc::downgrade(&self.shared),
+            shared: Some(Arc::downgrade(&self.shared)),
         }
     }
 
@@ -193,14 +193,15 @@ impl<T: Clone + Eq> Watchable<T> {
     }
 }
 
-impl<T> Drop for Watchable<T> {
+impl<T> Drop for Shared<T> {
     fn drop(&mut self) {
-        let Ok(mut watchers) = self.shared.watchers.lock() else {
+        let Ok(mut watchers) = self.watchers.lock() else {
             return; // Poisoned waking?
         };
-        // Wake all watchers every time we drop.
-        // This allows us to notify `NextFut::poll`s that the underlying
-        // watchable might be dropped.
+        // Wake all watchers once we drop Shared (this happens when
+        // the last `Watchable` is dropped).
+        // This allows us to notify `NextFut::poll`s and have that
+        // return `Disconnected`.
         for watcher in watchers.drain(..) {
             watcher.wake();
         }
@@ -388,14 +389,19 @@ pub trait Watcher: Clone {
 #[derive(Debug, Clone)]
 pub struct Direct<T> {
     state: State<T>,
-    shared: Weak<Shared<T>>,
+    // We wrap the Weak with an Option, so that we can set it to `None` once we
+    // notice that Weak is not upgradable anymore for the first time.
+    // This allows the weak pointer's allocation to be freed in case this makes
+    // the weak count go to zero (even if Direct is still kept around).
+    shared: Option<Weak<Shared<T>>>,
 }
 
 impl<T: Clone + Eq> Watcher for Direct<T> {
     type Value = T;
 
     fn update(&mut self) -> bool {
-        let Some(shared) = self.shared.upgrade() else {
+        let Some(shared) = self.shared.as_ref().and_then(|weak| weak.upgrade()) else {
+            self.shared = None; // Weak won't be upgradable in the future, this way we can allow the allocation to be freed
             return false;
         };
         let state = shared.state();
@@ -412,11 +418,15 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
     }
 
     fn is_connected(&self) -> bool {
-        self.shared.upgrade().is_some()
+        self.shared
+            .as_ref()
+            .and_then(|weak| weak.upgrade())
+            .is_some()
     }
 
     fn poll_updated(&mut self, cx: &mut task::Context<'_>) -> Poll<Result<(), Disconnected>> {
-        let Some(shared) = self.shared.upgrade() else {
+        let Some(shared) = self.shared.as_ref().and_then(|weak| weak.upgrade()) else {
+            self.shared = None; // Weak won't be upgradable in the future, this way we can allow the allocation to be freed
             return Poll::Ready(Err(Disconnected));
         };
         self.state = ready!(shared.poll_updated(cx, self.state.epoch));
