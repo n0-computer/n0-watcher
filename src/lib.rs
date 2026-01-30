@@ -822,7 +822,7 @@ impl<T: Clone> Shared<T> {
     fn add_waker(&self, cx: &mut task::Context<'_>) {
         let mut wakers = self.wakers.lock().expect("poisoned");
         for waker in wakers.iter() {
-            if waker.will_wake(&cx.waker()) {
+            if waker.will_wake(cx.waker()) {
                 return;
             }
         }
