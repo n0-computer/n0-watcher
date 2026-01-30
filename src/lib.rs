@@ -133,7 +133,7 @@ impl<T: Clone + Eq> Watchable<T> {
                     value,
                     epoch: INITIAL_EPOCH,
                 }),
-                watchers: Default::default(),
+                wakers: Default::default(),
             }),
         }
     }
@@ -164,7 +164,7 @@ impl<T: Clone + Eq> Watchable<T> {
 
         // Notify watchers
         if changed {
-            for watcher in self.shared.watchers.lock().expect("poisoned").drain(..) {
+            for watcher in self.shared.wakers.lock().expect("poisoned").drain(..) {
                 watcher.wake();
             }
         }
@@ -195,7 +195,7 @@ impl<T: Clone + Eq> Watchable<T> {
 
 impl<T> Drop for Shared<T> {
     fn drop(&mut self) {
-        let Ok(mut watchers) = self.watchers.lock() else {
+        let Ok(mut watchers) = self.wakers.lock() else {
             return; // Poisoned waking?
         };
         // Wake all watchers once we drop Shared (this happens when
@@ -764,7 +764,7 @@ const INITIAL_EPOCH: u64 = 1;
 struct Shared<T> {
     /// The value to be watched and its current epoch.
     state: RwLock<State<T>>,
-    watchers: Mutex<VecDeque<Waker>>,
+    wakers: Mutex<VecDeque<Waker>>,
 }
 
 #[derive(Debug, Clone)]
@@ -802,10 +802,7 @@ impl<T: Clone> Shared<T> {
             }
         }
 
-        self.watchers
-            .lock()
-            .expect("poisoned")
-            .push_back(cx.waker().to_owned());
+        self.add_waker(cx);
 
         #[cfg(watcher_loom)]
         loom::thread::yield_now();
@@ -820,6 +817,16 @@ impl<T: Clone> Shared<T> {
         }
 
         Poll::Pending
+    }
+
+    fn add_waker(&self, cx: &mut task::Context<'_>) {
+        let mut wakers = self.wakers.lock().expect("poisoned");
+        for waker in wakers.iter() {
+            if waker.will_wake(cx.waker()) {
+                return;
+            }
+        }
+        wakers.push_back(cx.waker().clone());
     }
 }
 
@@ -1432,5 +1439,37 @@ mod tests {
         assert_eq!(watcher_join.get(), vec![0, 1]);
         assert_eq!(watcher_join.peek(), &vec![0, 1]);
         assert!(!watcher_join.update());
+    }
+
+    #[tokio::test]
+    async fn test_ensure_wakers_bounded() {
+        use tokio::time::{interval, Duration};
+        let watchable = Watchable::new(0);
+        let mut watcher = watchable.watch();
+        let max_tick = 1000;
+
+        let handle = tokio::spawn(async move {
+            let mut ticker = interval(Duration::from_nanos(1));
+            let mut tick_no = 0;
+            loop {
+                tokio::select! {
+                    _ = watcher.updated() => {}
+                    _ = ticker.tick() => {
+                        // We cancel the other future and start over again
+                        tick_no += 1;
+                        if tick_no > max_tick{
+                            return
+                        }
+                    }
+                }
+                let num_wakers = watchable.shared.wakers.lock().unwrap().len();
+                assert_eq!(num_wakers, 1);
+            }
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .unwrap()
+            .unwrap()
     }
 }
