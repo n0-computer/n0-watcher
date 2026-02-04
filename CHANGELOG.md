@@ -1,7 +1,13 @@
-
 # Changelog
 
-## [0.6.0](https://github.com/n0-computer/n0-watcher/compare/v0.4.0..v0.5.0) - 2025-11-12
+## [0.6.1](https://github.com/n0-computer/n0-watcher/compare/v0.6.0..0.6.1) - 2026-02-04
+
+### 🐛 Bug Fixes
+
+- Free the allocation the Weak pointer keeps alive once we notice its strong count is 0 ([#38](https://github.com/n0-computer/n0-watcher/issues/38)) - ([3e3c8e7](https://github.com/n0-computer/n0-watcher/commit/3e3c8e7883a869fe262981d4b9c9249618484bcc))
+- Avoid adding wakers that wake the same task ([#46](https://github.com/n0-computer/n0-watcher/issues/46)) - ([c2e2ce8](https://github.com/n0-computer/n0-watcher/commit/c2e2ce8359db7b17aabf8f80307b1a274483f72e))
+
+## [0.6.0](https://github.com/n0-computer/n0-watcher/compare/v0.5.0..v0.6.0) - 2025-11-12
 
 ### ⛰️  Features
 
@@ -81,3 +87,5 @@ PRs:
 ### ⚙️ Miscellaneous Tasks
 
 - Prep release - ([15407c0](https://github.com/n0-computer/n0-watcher/commit/15407c0e6be13cc479bb09bc949fa4c1394452e3))
+
+
