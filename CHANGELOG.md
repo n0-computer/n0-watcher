@@ -13,13 +13,6 @@
 
 - Split up `Watcher::get` into `Watcher::update` and `Watcher::peek` for more control over perf ([#32](https://github.com/n0-computer/n0-watcher/issues/32)) - ([956c17b](https://github.com/n0-computer/n0-watcher/commit/956c17b108d79e390556db750a93205839c733fd))
 
-Breaking changes:
-- Added required method `peek` to the `Watcher` trait
-- Added required method `update` to the `Watcher` trait
-- Made `get` a method with a default implementation in the `Watcher` trait
-- `Watcher::poll_updated` no longer returns `Self::Value` on success. Instead it returns `()`. The current value can be extracted using `peek` afterwards.
-- Removed `impl<S: Watcher, T: Watcher> Watcher for (S, T)` and `impl<S: Watcher, T: Watcher, U: Watcher> Watcher for (S, T, U)` implementations. Use `Tuple` and `Triple` structs instead.
-
 ## [0.5.0](https://github.com/n0-computer/n0-watcher/compare/v0.4.0..v0.5.0) - 2025-11-03
 
 ### ⛰️  Features
@@ -50,18 +43,6 @@ Breaking changes:
 
 ### ⛰️  Features
 
-- Added `Watchable::has_watchers(&self) -> bool`
-- Added `Watcher::is_connected(&self) -> bool`
-
-Breaking Changes:
-- `Watcher::get` now takes `&mut self` instead of `&self` and returns `Self::Value` instead of `Result<Self::Value, Disconnected>`.
-  It will now update the watcher to the latest value internally, so a call to `Watcher::get` in between two `Watcher::poll_updated` calls will potentially have an effect it didn't have before.
-  It now also returns the last known state intsead of potentially returning disconnected.
-  If you want to know about the disconnected state, use `Watcher::is_connected`.
-- `InitializedFut` now implements `Future<Output = T>` instead of `Future<Output = Result<T, Disconnected>>`.
-  Should the underlying watchable disconnect, the future will now be pending forever.
-
-PRs:
 - [**breaking**] Make `Watcher::get` take `&mut self` and return a value instead of `Result` ([#6](https://github.com/n0-computer/n0-watcher/issues/6)) - ([eaf849e](https://github.com/n0-computer/n0-watcher/commit/eaf849eb590e7a6affe3a8a2ca32bb0a48488436))
 - Implement `Watchable::has_watchers` and fix a couple of edge cases ([#7](https://github.com/n0-computer/n0-watcher/issues/7)) - ([437cf43](https://github.com/n0-computer/n0-watcher/commit/437cf43942cb8b9941fd14a0a65e26fce1fd7bb1))
 
