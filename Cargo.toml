@@ -1,6 +1,6 @@
 [package]
 name = "n0-watcher"
-version = "0.6.1"
+version = "1.0.0-rc.0"
 edition = "2021"
 readme = "README.md"
 description = "async watchable values"
