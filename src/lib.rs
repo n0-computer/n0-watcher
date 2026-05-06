@@ -834,7 +834,7 @@ impl<T: Clone> Shared<T> {
 mod tests {
 
     use n0_future::{future::poll_once, StreamExt};
-    use rand::{rng, Rng};
+    use rand::{rng, RngExt};
     use tokio::{
         task::JoinSet,
         time::{Duration, Instant},

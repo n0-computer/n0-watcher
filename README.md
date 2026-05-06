@@ -1,5 +1,13 @@
 # n0-watcher
 
+[![Documentation](https://img.shields.io/badge/docs-latest-blue.svg?style=flat-square)](https://docs.rs/n0-watcher/)
+[![Crates.io](https://img.shields.io/crates/v/n0-watcher.svg?style=flat-square)](https://crates.io/crates/n0-watcher)
+[![downloads](https://img.shields.io/crates/d/n0-watcher.svg?style=flat-square)](https://crates.io/crates/n0-watcher)
+[![Chat](https://img.shields.io/discord/1161119546170687619?logo=discord&style=flat-square)](https://discord.com/invite/DpmJgtU7cW)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE-MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](LICENSE-APACHE)
+[![CI](https://img.shields.io/github/actions/workflow/status/n0-computer/n0-watcher/ci.yaml?branch=main&style=flat-square&label=CI)](https://github.com/n0-computer/n0-watcher/actions/workflows/ci.yaml)
+
 > Watchable values.
 
 A `Watchable` exists to keep track of a value which may change over time.  It allows
@@ -12,20 +20,9 @@ of the channel filling up, but instead you might miss items.
 See [the module documentation][https://docs.rs/n0-watcher] for more information.
 
 
-## Note to Maintainers: Creating a release
-
-- Make sure to have `git-cliff`, `cargo-release` and `cargo-semver-checks` installed.
-- Figure out whether this release is major/minor/patch by running `cargo semver-checks check-release --release-type=major/minor/patch` and see which one fits
-- Use `git-cliff` to generate the changelog
-- Bump the version by major/minor/patch in `Cargo.toml` and create a release prep PR. Make sure to prefix the release prep PR name with `chore(release):`.
-- Review and merge the PR.
-- Run `cargo release` to check if the release would go through well.
-- Run `cargo release --execute` to run the release
-
-
 ## License
 
-Copyright 2025 N0, INC.
+Copyright 2026 N0, INC.
 
 This project is licensed under either of
 
