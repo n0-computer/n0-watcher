@@ -1,6 +1,12 @@
 # Changelog
 
-## [1.0.0-rc.0](https://github.com/n0-computer/n0-watcher/compare/0.6.1..1.0.0-rc.0) - 2026-05-06
+## [1.0.0](https://github.com/n0-computer/n0-watcher/compare/v1.0.0-rc.0..1.0.0) - 2026-06-15
+
+### ⛰️  Features
+
+- [**breaking**] Update to n0-error@1.0 ([#59](https://github.com/n0-computer/n0-watcher/issues/59)) - ([7471990](https://github.com/n0-computer/n0-watcher/commit/7471990a8eab8daaf437139146363d0d1a05b9d8))
+
+## [1.0.0-rc.0](https://github.com/n0-computer/n0-watcher/compare/0.6.1..v1.0.0-rc.0) - 2026-05-06
 
 ### ⚙️ Miscellaneous Tasks
 

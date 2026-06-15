@@ -405,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "n0-watcher"
-version = "1.0.0-rc.0"
+version = "1.0.0"
 dependencies = [
  "derive_more",
  "n0-error",
