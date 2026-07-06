@@ -1526,9 +1526,11 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn regression_memleak() {
-        let mem_baseline = procinfo::pid::statm_self().unwrap().resident;
+        let process = procfs::process::Process::myself().unwrap();
+        let mem_baseline = process.statm().unwrap().resident;
 
         const N: usize = 20000;
         let watchable = Watchable::new(0u64);
@@ -1553,11 +1555,11 @@ mod tests {
             .ok();
         }
 
-        let mem_use_1 = procinfo::pid::statm_self().unwrap().resident - mem_baseline;
+        let mem_use_1 = process.statm().unwrap().resident - mem_baseline;
         // All N tasks completed and joined, yet their memory stays allocated;
         // `watchable.set(1)` frees all of it.
         watchable.set(1).unwrap();
-        let mem_use_2 = procinfo::pid::statm_self().unwrap().resident - mem_baseline;
+        let mem_use_2 = process.statm().unwrap().resident - mem_baseline;
         assert_eq!(
             mem_use_1, mem_use_2,
             "watchable.set(1) shouldn't free memory"
