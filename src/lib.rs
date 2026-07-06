@@ -77,7 +77,6 @@
 #[cfg(not(watcher_loom))]
 use std::sync;
 use std::{
-    collections::VecDeque,
     future::Future,
     pin::Pin,
     sync::{Arc, RwLockReadGuard, Weak},
@@ -164,7 +163,7 @@ impl<T: Clone + Eq> Watchable<T> {
 
         // Notify watchers
         if changed {
-            for watcher in self.shared.wakers.lock().expect("poisoned").drain(..) {
+            for (_, watcher) in self.shared.wakers.lock().expect("poisoned").drain() {
                 watcher.wake();
             }
         }
@@ -176,6 +175,7 @@ impl<T: Clone + Eq> Watchable<T> {
         Direct {
             state: self.shared.state().clone(),
             shared: Some(Arc::downgrade(&self.shared)),
+            waker_key: None,
         }
     }
 
@@ -202,7 +202,7 @@ impl<T> Drop for Shared<T> {
         // the last `Watchable` is dropped).
         // This allows us to notify `NextFut::poll`s and have that
         // return `Disconnected`.
-        for watcher in watchers.drain(..) {
+        for (_, watcher) in watchers.drain() {
             watcher.wake();
         }
     }
@@ -386,14 +386,34 @@ pub trait Watcher: Clone {
 /// The immediate, direct observer of a [`Watchable`] value.
 ///
 /// This type is mainly used via the [`Watcher`] interface.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Direct<T> {
     state: State<T>,
-    // We wrap the Weak with an Option, so that we can set it to `None` once we
-    // notice that Weak is not upgradable anymore for the first time.
-    // This allows the weak pointer's allocation to be freed in case this makes
-    // the weak count go to zero (even if Direct is still kept around).
+    /// The reference of state shared with the connected [`Watchable`].
+    ///
+    /// We wrap the Weak with an Option, so that we can set it to `None` once we
+    /// notice that Weak is not upgradable anymore for the first time.
+    /// This allows the weak pointer's allocation to be freed in case this makes
+    /// the weak count go to zero (even if Direct is still kept around).
     shared: Option<Weak<Shared<T>>>,
+    /// The key we get when registering the waker.
+    ///
+    /// This allows us to tell `Shared` to remove our waker once we are
+    /// no longer interested in getting notified (i.e. on drop).
+    ///
+    /// Prevents leaking memory when constructing `Direct`s constantly, polling at
+    /// least once and then dropping them again.
+    waker_key: Option<slotmap::DefaultKey>,
+}
+
+impl<T: Clone> Clone for Direct<T> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            shared: self.shared.clone(),
+            waker_key: None,
+        }
+    }
 }
 
 impl<T: Clone + Eq> Watcher for Direct<T> {
@@ -429,8 +449,20 @@ impl<T: Clone + Eq> Watcher for Direct<T> {
             self.shared = None; // Weak won't be upgradable in the future, this way we can allow the allocation to be freed
             return Poll::Ready(Err(Disconnected));
         };
-        self.state = ready!(shared.poll_updated(cx, self.state.epoch));
+        self.state = ready!(shared.poll_updated(cx, self.state.epoch, &mut self.waker_key));
         Poll::Ready(Ok(()))
+    }
+}
+
+impl<T> Drop for Direct<T> {
+    fn drop(&mut self) {
+        let Some(shared) = self.shared.take().and_then(|weak| weak.upgrade()) else {
+            return;
+        };
+        let Some(key) = self.waker_key.take() else {
+            return;
+        };
+        shared.remove_waker(key);
     }
 }
 
@@ -764,7 +796,7 @@ const INITIAL_EPOCH: u64 = 1;
 struct Shared<T> {
     /// The value to be watched and its current epoch.
     state: RwLock<State<T>>,
-    wakers: Mutex<VecDeque<Waker>>,
+    wakers: Mutex<slotmap::DenseSlotMap<slotmap::DefaultKey, Waker>>,
 }
 
 #[derive(Debug, Clone)]
@@ -791,7 +823,12 @@ impl<T: Clone> Shared<T> {
         self.state.read().expect("poisoned")
     }
 
-    fn poll_updated(&self, cx: &mut task::Context<'_>, last_epoch: u64) -> Poll<State<T>> {
+    fn poll_updated(
+        &self,
+        cx: &mut task::Context<'_>,
+        last_epoch: u64,
+        waker_key: &mut Option<slotmap::DefaultKey>,
+    ) -> Poll<State<T>> {
         {
             let state = self.state();
 
@@ -802,7 +839,7 @@ impl<T: Clone> Shared<T> {
             }
         }
 
-        self.add_waker(cx);
+        *waker_key = Some(self.add_waker(cx));
 
         #[cfg(watcher_loom)]
         loom::thread::yield_now();
@@ -819,14 +856,30 @@ impl<T: Clone> Shared<T> {
         Poll::Pending
     }
 
-    fn add_waker(&self, cx: &mut task::Context<'_>) {
+    /// Adds the task's waker to this watchable.
+    ///
+    /// The waker will be woken when the watchable is dropped completely
+    /// or when the watcher is updated.
+    ///
+    /// Returns the key used in the waker slotmap.
+    /// This can be used to remove the waker if a notification is not
+    /// needed anymore.
+    fn add_waker(&self, cx: &mut task::Context<'_>) -> slotmap::DefaultKey {
         let mut wakers = self.wakers.lock().expect("poisoned");
-        for waker in wakers.iter() {
+        for (key, waker) in wakers.iter() {
             if waker.will_wake(cx.waker()) {
-                return;
+                return key;
             }
         }
-        wakers.push_back(cx.waker().clone());
+        wakers.insert(cx.waker().clone())
+    }
+}
+
+impl<T> Shared<T> {
+    /// Removes and optionally returns the waker that was added via [`Self::add_waker`] before.
+    fn remove_waker(&self, waker_key: slotmap::DefaultKey) -> Option<Waker> {
+        let mut wakers = self.wakers.lock().expect("poisoned");
+        wakers.remove(waker_key)
     }
 }
 
@@ -1471,5 +1524,47 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn regression_memleak() {
+        let process = procfs::process::Process::myself().unwrap();
+        let mem_baseline = process.statm().unwrap().resident;
+
+        const N: usize = 20000;
+        let watchable = Watchable::new(0u64);
+        for _ in 0..N {
+            let mut w = watchable.watch();
+            tokio::spawn(async move {
+                // Stand-in for a real future's state.
+                // Pushes this future beyond the size that makes tokio
+                // store this future boxed.
+                let pad = [0u8; 3600];
+                std::hint::black_box(&pad);
+                // Register the `Direct` as a future in this tokio task by polling once,
+                // but then end the task without waiting for wake.
+                tokio::select! {
+                    biased;
+                    _ = w.updated() => {}
+                    _ = std::future::ready(()) => {}
+                }
+                std::hint::black_box(&pad);
+            })
+            .await
+            .ok();
+        }
+
+        let mem_use_1 = process.statm().unwrap().resident - mem_baseline;
+        // All N tasks completed and joined. The watchable should not store any wakers.
+        // Calling `watchable.set(1)` would drain all wakers. In a previous version that
+        // list was non-empty here and draining it would free memory.
+        // In the current version nothing should change.
+        watchable.set(1).unwrap();
+        let mem_use_2 = process.statm().unwrap().resident - mem_baseline;
+        assert_eq!(
+            mem_use_1, mem_use_2,
+            "watchable.set(1) shouldn't free memory"
+        )
     }
 }
