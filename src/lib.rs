@@ -1556,8 +1556,10 @@ mod tests {
         }
 
         let mem_use_1 = process.statm().unwrap().resident - mem_baseline;
-        // All N tasks completed and joined, yet their memory stays allocated;
-        // `watchable.set(1)` frees all of it.
+        // All N tasks completed and joined. The watchable should not store any wakers.
+        // Calling `watchable.set(1)` would drain all wakers. In a previous version that
+        // list was non-empty here and draining it would free memory.
+        // In the current version nothing should change.
         watchable.set(1).unwrap();
         let mem_use_2 = process.statm().unwrap().resident - mem_baseline;
         assert_eq!(
