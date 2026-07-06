@@ -163,8 +163,8 @@ impl<T: Clone + Eq> Watchable<T> {
 
         // Notify watchers
         if changed {
-            for (_, watcher) in self.shared.wakers.lock().expect("poisoned").drain() {
-                watcher.wake();
+            for (_, (waker, _)) in self.shared.wakers.lock().expect("poisoned").drain() {
+                waker.wake();
             }
         }
         ret
@@ -195,15 +195,15 @@ impl<T: Clone + Eq> Watchable<T> {
 
 impl<T> Drop for Shared<T> {
     fn drop(&mut self) {
-        let Ok(mut watchers) = self.wakers.lock() else {
+        let Ok(mut wakers) = self.wakers.lock() else {
             return; // Poisoned waking?
         };
-        // Wake all watchers once we drop Shared (this happens when
+        // Wake all wakers once we drop Shared (this happens when
         // the last `Watchable` is dropped).
         // This allows us to notify `NextFut::poll`s and have that
         // return `Disconnected`.
-        for (_, watcher) in watchers.drain() {
-            watcher.wake();
+        for (_, (waker, _)) in wakers.drain() {
+            waker.wake();
         }
     }
 }
@@ -796,7 +796,7 @@ const INITIAL_EPOCH: u64 = 1;
 struct Shared<T> {
     /// The value to be watched and its current epoch.
     state: RwLock<State<T>>,
-    wakers: Mutex<slotmap::DenseSlotMap<slotmap::DefaultKey, Waker>>,
+    wakers: Mutex<slotmap::DenseSlotMap<slotmap::DefaultKey, (Waker, u64)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -866,20 +866,27 @@ impl<T: Clone> Shared<T> {
     /// needed anymore.
     fn add_waker(&self, cx: &mut task::Context<'_>) -> slotmap::DefaultKey {
         let mut wakers = self.wakers.lock().expect("poisoned");
-        for (key, waker) in wakers.iter() {
+        for (key, (waker, count)) in wakers.iter_mut() {
             if waker.will_wake(cx.waker()) {
+                *count = count.saturating_add(1);
                 return key;
             }
         }
-        wakers.insert(cx.waker().clone())
+        wakers.insert((cx.waker().clone(), 1))
     }
 }
 
 impl<T> Shared<T> {
     /// Removes and optionally returns the waker that was added via [`Self::add_waker`] before.
-    fn remove_waker(&self, waker_key: slotmap::DefaultKey) -> Option<Waker> {
+    fn remove_waker(&self, waker_key: slotmap::DefaultKey) {
         let mut wakers = self.wakers.lock().expect("poisoned");
-        wakers.remove(waker_key)
+        // We remove first instead of fetching the count first, as we expect count == 1
+        // to be the common case.
+        if let Some((waker, count)) = wakers.remove(waker_key) {
+            if count > 1 {
+                wakers.insert((waker, count - 1));
+            }
+        }
     }
 }
 
@@ -1566,5 +1573,41 @@ mod tests {
             mem_use_1, mem_use_2,
             "watchable.set(1) shouldn't free memory"
         )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn regression_same_task_drop_one_watcher_during_poll() {
+        struct SameTaskDropOneDirectDuringPoll {
+            watcher_1: Option<Direct<u64>>,
+            watcher_2: Direct<u64>,
+        }
+
+        impl Future for SameTaskDropOneDirectDuringPoll {
+            type Output = Result<(), Disconnected>;
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+                // register a waker with both watchers
+                if let Some(watcher) = &mut self.watcher_1 {
+                    let _ = watcher.poll_updated(cx);
+                }
+                let res = self.watcher_2.poll_updated(cx);
+                self.watcher_1 = None; // drop watcher 1
+                res
+            }
+        }
+
+        let watcher = Watchable::new(0);
+        let weird = SameTaskDropOneDirectDuringPoll {
+            watcher_1: Some(watcher.watch()),
+            watcher_2: watcher.watch(),
+        };
+        let task = tokio::spawn(weird);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = watcher.set(1);
+        tokio::time::timeout(Duration::from_millis(100), task)
+            .await
+            .unwrap() // no panic
+            .unwrap() // no timeout
+            .unwrap(); // no watcher disconnect
     }
 }
