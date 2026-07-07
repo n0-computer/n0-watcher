@@ -191,6 +191,17 @@ impl<T: Clone + Eq> Watchable<T> {
         // `Direct`s watchers (which all watchers descend from) will increase the weak count
         Arc::weak_count(&self.shared) != 0
     }
+
+    #[cfg(test)]
+    fn debug_wake_counts(&self) -> Vec<u64> {
+        self.shared
+            .wakers
+            .lock()
+            .expect("poisoned")
+            .iter()
+            .map(|(_, (_, c))| *c)
+            .collect()
+    }
 }
 
 impl<T> Drop for Shared<T> {
@@ -839,7 +850,7 @@ impl<T: Clone> Shared<T> {
             }
         }
 
-        *waker_key = Some(self.add_waker(cx));
+        self.add_waker(cx, waker_key);
 
         #[cfg(watcher_loom)]
         loom::thread::yield_now();
@@ -861,18 +872,22 @@ impl<T: Clone> Shared<T> {
     /// The waker will be woken when the watchable is dropped completely
     /// or when the watcher is updated.
     ///
-    /// Returns the key used in the waker slotmap.
-    /// This can be used to remove the waker if a notification is not
-    /// needed anymore.
-    fn add_waker(&self, cx: &mut task::Context<'_>) -> slotmap::DefaultKey {
+    /// Will set `waker_key` to the key used in the waker slotmap.
+    /// `add_waker` needs to know the currently set waker key in order to
+    /// figure out whether it needs to increase the internal waker count
+    /// or not.
+    fn add_waker(&self, cx: &mut task::Context<'_>, waker_key: &mut Option<slotmap::DefaultKey>) {
         let mut wakers = self.wakers.lock().expect("poisoned");
         for (key, (waker, count)) in wakers.iter_mut() {
             if waker.will_wake(cx.waker()) {
-                *count = count.saturating_add(1);
-                return key;
+                if Some(key) != *waker_key {
+                    *count = count.saturating_add(1);
+                    *waker_key = Some(key);
+                }
+                return;
             }
         }
-        wakers.insert((cx.waker().clone(), 1))
+        *waker_key = Some(wakers.insert((cx.waker().clone(), 1)));
     }
 }
 
@@ -1609,5 +1624,26 @@ mod tests {
             .unwrap() // no panic
             .unwrap() // no timeout
             .unwrap(); // no watcher disconnect
+    }
+
+    #[tokio::test]
+    async fn regression_waker_count_stuck_on_double_poll() {
+        let watchable = Watchable::new(0u64);
+        let mut watcher = watchable.watch();
+
+        // poll the watcher twice
+        tokio::select! {
+            biased;
+            _ = watcher.updated() => {}
+            _ = std::future::ready(()) => {}
+        }
+        tokio::select! {
+            biased;
+            _ = watcher.updated() => {}
+            _ = std::future::ready(()) => {}
+        }
+        drop(watcher);
+
+        assert_eq!(watchable.debug_wake_counts(), vec![]);
     }
 }
