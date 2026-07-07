@@ -193,7 +193,7 @@ impl<T: Clone + Eq> Watchable<T> {
     }
 
     #[cfg(test)]
-    fn debug_wake_counts(&self) -> Vec<u64> {
+    fn debug_waker_counts(&self) -> Vec<u64> {
         self.shared
             .wakers
             .lock()
@@ -895,11 +895,14 @@ impl<T> Shared<T> {
     /// Removes and optionally returns the waker that was added via [`Self::add_waker`] before.
     fn remove_waker(&self, waker_key: slotmap::DefaultKey) {
         let mut wakers = self.wakers.lock().expect("poisoned");
-        // We remove first instead of fetching the count first, as we expect count == 1
-        // to be the common case.
-        if let Some((waker, count)) = wakers.remove(waker_key) {
-            if count > 1 {
-                wakers.insert((waker, count - 1));
+        // We need to be careful to not use `remove` -> `insert` in favor of `get_mut`,
+        // because we care about the key the waker is stored under, as other watchers
+        // might still refer to the slot under that key.
+        if let Some((_, count)) = wakers.get_mut(waker_key) {
+            if *count <= 1 {
+                wakers.remove(waker_key);
+            } else {
+                *count -= 1;
             }
         }
     }
@@ -1644,6 +1647,32 @@ mod tests {
         }
         drop(watcher);
 
-        assert_eq!(watchable.debug_wake_counts(), vec![]);
+        assert_eq!(watchable.debug_waker_counts(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn regression_waker_key_must_be_unchanged_on_remove() {
+        let watchable = Watchable::new(0u64);
+        let mut w1 = watchable.watch();
+        let mut w2 = watchable.watch();
+
+        // poll the watcher twice
+        tokio::select! {
+            biased;
+            _ = w1.updated() => {}
+            _ = w2.updated() => {}
+            _ = std::future::ready(()) => {}
+        }
+        assert_eq!(watchable.debug_waker_counts(), vec![2]);
+        drop(w2);
+        assert_eq!(watchable.debug_waker_counts(), vec![1]);
+        tokio::select! {
+            biased;
+            _ = w1.updated() => {}
+            _ = std::future::ready(()) => {}
+        }
+        assert_eq!(watchable.debug_waker_counts(), vec![1]);
+        drop(w1);
+        assert_eq!(watchable.debug_waker_counts(), vec![]);
     }
 }
