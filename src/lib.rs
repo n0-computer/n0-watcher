@@ -1656,7 +1656,7 @@ mod tests {
         let mut w1 = watchable.watch();
         let mut w2 = watchable.watch();
 
-        // poll the watcher twice
+        // register both watchers' wakers
         tokio::select! {
             biased;
             _ = w1.updated() => {}
@@ -1664,15 +1664,18 @@ mod tests {
             _ = std::future::ready(()) => {}
         }
         assert_eq!(watchable.debug_waker_counts(), vec![2]);
-        drop(w2);
+        drop(w2); // unregister one watcher
         assert_eq!(watchable.debug_waker_counts(), vec![1]);
+        // This used to add another count to the waker as
+        // unregistering one watcher used to swap out the key
+        // used for said waker.
         tokio::select! {
             biased;
             _ = w1.updated() => {}
             _ = std::future::ready(()) => {}
         }
         assert_eq!(watchable.debug_waker_counts(), vec![1]);
-        drop(w1);
+        drop(w1); // dropping the final waker should free the waker list
         assert_eq!(watchable.debug_waker_counts(), vec![]);
     }
 }
