@@ -807,6 +807,14 @@ const INITIAL_EPOCH: u64 = 1;
 struct Shared<T> {
     /// The value to be watched and its current epoch.
     state: RwLock<State<T>>,
+    /// Watcher wakers to be notified when this watchable is changed or dropped.
+    ///
+    /// We use a slotmap so we have a stable key we can store in the watcher for it to
+    /// remember which waker it previously inserted into the slot map.
+    /// We also store a u64 "reference count" of how many watchers have registered said
+    /// waker in the same task. This ensures we only remove the waker once the last
+    /// watcher from that task is dropped, while making sure that we don't register
+    /// wakers twice for the same task (saving memory).
     wakers: Mutex<slotmap::DenseSlotMap<slotmap::DefaultKey, (Waker, u64)>>,
 }
 
@@ -882,10 +890,20 @@ impl<T: Clone> Shared<T> {
             if waker.will_wake(cx.waker()) {
                 if Some(key) != *waker_key {
                     *count = count.saturating_add(1);
-                    *waker_key = Some(key);
+                    if let Some(old_key) = std::mem::replace(waker_key, Some(key)) {
+                        // This makes sure we clean up a potentially old waker we added previously.
+                        Self::dec_or_rem_waker(&mut wakers, old_key);
+                    }
                 }
                 return;
             }
+        }
+        // There can be technical reasons why runtimes have `will_wake` false positives
+        // (e.g. tokio root block_on wakers being on different CGUs in release mode) which
+        // means we add a new waker every poll. This makes sure we clean up wakers from the
+        // last poll call, if still present.
+        if let Some(old_key) = waker_key.take() {
+            Self::dec_or_rem_waker(&mut wakers, old_key);
         }
         *waker_key = Some(wakers.insert((cx.waker().clone(), 1)));
     }
@@ -895,6 +913,17 @@ impl<T> Shared<T> {
     /// Removes and optionally returns the waker that was added via [`Self::add_waker`] before.
     fn remove_waker(&self, waker_key: slotmap::DefaultKey) {
         let mut wakers = self.wakers.lock().expect("poisoned");
+        Self::dec_or_rem_waker(&mut wakers, waker_key);
+    }
+
+    /// Decrements the count of a waker entry, removing it when it reaches zero.
+    ///
+    /// Operates on an already-locked `wakers` guard to avoid re-entrant locking
+    /// from within [`Shared::add_waker`].
+    fn dec_or_rem_waker(
+        wakers: &mut slotmap::DenseSlotMap<slotmap::DefaultKey, (Waker, u64)>,
+        waker_key: slotmap::DefaultKey,
+    ) {
         // We need to be careful to not use `remove` -> `insert` in favor of `get_mut`,
         // because we care about the key the waker is stored under, as other watchers
         // might still refer to the slot under that key.
@@ -1663,9 +1692,13 @@ mod tests {
             _ = w2.updated() => {}
             _ = std::future::ready(()) => {}
         }
-        assert_eq!(watchable.debug_waker_counts(), vec![2]);
+        // we test the sum, because release and debug mode operate differently with tokio:
+        // In release mode, `will_wake` returns false negatives causing us to have [1, 1] waker counts,
+        // in debug mode, this doesn't happen, thus we're left with [2] as the waker counts.
+        // The reason for the difference is related to tokio waker vtables being split across CGUs.
+        assert_eq!(watchable.debug_waker_counts().iter().sum::<u64>(), 2);
         drop(w2); // unregister one watcher
-        assert_eq!(watchable.debug_waker_counts(), vec![1]);
+        assert_eq!(watchable.debug_waker_counts().iter().sum::<u64>(), 1);
         // This used to add another count to the waker as
         // unregistering one watcher used to swap out the key
         // used for said waker.
@@ -1674,7 +1707,7 @@ mod tests {
             _ = w1.updated() => {}
             _ = std::future::ready(()) => {}
         }
-        assert_eq!(watchable.debug_waker_counts(), vec![1]);
+        assert_eq!(watchable.debug_waker_counts().iter().sum::<u64>(), 1);
         drop(w1); // dropping the final waker should free the waker list
         assert_eq!(watchable.debug_waker_counts(), vec![]);
     }
