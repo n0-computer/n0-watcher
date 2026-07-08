@@ -29,9 +29,6 @@ rand = "0.10"
 tokio = { version = "1", features = ["macros", "sync", "rt-multi-thread", "time", "test-util"] }
 tokio-util = { version = "0.7", features = ["io-util", "io", "rt"] }
 
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-procfs = "0.18.0"
-
 [lints.rust]
 missing_debug_implementations = "warn"
 # We have our own `watcher_loom` cfg to enable tokio-rs/loom testing.

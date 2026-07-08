@@ -898,7 +898,7 @@ impl<T: Clone> Shared<T> {
                 return;
             }
         }
-        // There can be technical reasons why runtimes have `will_wake` false positives
+        // There can be technical reasons why runtimes have `will_wake` false negatives
         // (e.g. tokio root block_on wakers being on different CGUs in release mode) which
         // means we add a new waker every poll. This makes sure we clean up wakers from the
         // last poll call, if still present.
@@ -1580,22 +1580,15 @@ mod tests {
             .unwrap()
     }
 
-    #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn regression_memleak() {
-        let process = procfs::process::Process::myself().unwrap();
-        let mem_baseline = process.statm().unwrap().resident;
-
-        const N: usize = 20000;
+    async fn regression_completed_tasks_clean_up_wakers() {
+        const N: usize = 100;
         let watchable = Watchable::new(0u64);
+
+        let mut tasks = JoinSet::new();
         for _ in 0..N {
             let mut w = watchable.watch();
-            tokio::spawn(async move {
-                // Stand-in for a real future's state.
-                // Pushes this future beyond the size that makes tokio
-                // store this future boxed.
-                let pad = [0u8; 3600];
-                std::hint::black_box(&pad);
+            tasks.spawn(async move {
                 // Register the `Direct` as a future in this tokio task by polling once,
                 // but then end the task without waiting for wake.
                 tokio::select! {
@@ -1603,23 +1596,14 @@ mod tests {
                     _ = w.updated() => {}
                     _ = std::future::ready(()) => {}
                 }
-                std::hint::black_box(&pad);
-            })
-            .await
-            .ok();
+            });
         }
+        tasks.join_all().await;
 
-        let mem_use_1 = process.statm().unwrap().resident - mem_baseline;
         // All N tasks completed and joined. The watchable should not store any wakers.
         // Calling `watchable.set(1)` would drain all wakers. In a previous version that
         // list was non-empty here and draining it would free memory.
-        // In the current version nothing should change.
-        watchable.set(1).unwrap();
-        let mem_use_2 = process.statm().unwrap().resident - mem_baseline;
-        assert_eq!(
-            mem_use_1, mem_use_2,
-            "watchable.set(1) shouldn't free memory"
-        )
+        assert_eq!(watchable.debug_waker_counts(), vec![]);
     }
 
     #[tokio::test(start_paused = true)]
