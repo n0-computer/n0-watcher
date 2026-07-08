@@ -890,7 +890,7 @@ impl<T: Clone> Shared<T> {
             if waker.will_wake(cx.waker()) {
                 if Some(key) != *waker_key {
                     *count = count.saturating_add(1);
-                    if let Some(old_key) = std::mem::replace(waker_key, Some(key)) {
+                    if let Some(old_key) = waker_key.replace(key) {
                         // This makes sure we clean up a potentially old waker we added previously.
                         Self::dec_or_rem_waker(&mut wakers, old_key);
                     }
