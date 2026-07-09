@@ -163,8 +163,8 @@ impl<T: Clone + Eq> Watchable<T> {
 
         // Notify watchers
         if changed {
-            for (_, watcher) in self.shared.wakers.lock().expect("poisoned").drain() {
-                watcher.wake();
+            for (_, (waker, _)) in self.shared.wakers.lock().expect("poisoned").drain() {
+                waker.wake();
             }
         }
         ret
@@ -191,19 +191,30 @@ impl<T: Clone + Eq> Watchable<T> {
         // `Direct`s watchers (which all watchers descend from) will increase the weak count
         Arc::weak_count(&self.shared) != 0
     }
+
+    #[cfg(test)]
+    fn debug_waker_counts(&self) -> Vec<u64> {
+        self.shared
+            .wakers
+            .lock()
+            .expect("poisoned")
+            .iter()
+            .map(|(_, (_, c))| *c)
+            .collect()
+    }
 }
 
 impl<T> Drop for Shared<T> {
     fn drop(&mut self) {
-        let Ok(mut watchers) = self.wakers.lock() else {
+        let Ok(mut wakers) = self.wakers.lock() else {
             return; // Poisoned waking?
         };
-        // Wake all watchers once we drop Shared (this happens when
+        // Wake all wakers once we drop Shared (this happens when
         // the last `Watchable` is dropped).
         // This allows us to notify `NextFut::poll`s and have that
         // return `Disconnected`.
-        for (_, watcher) in watchers.drain() {
-            watcher.wake();
+        for (_, (waker, _)) in wakers.drain() {
+            waker.wake();
         }
     }
 }
@@ -796,7 +807,15 @@ const INITIAL_EPOCH: u64 = 1;
 struct Shared<T> {
     /// The value to be watched and its current epoch.
     state: RwLock<State<T>>,
-    wakers: Mutex<slotmap::DenseSlotMap<slotmap::DefaultKey, Waker>>,
+    /// Watcher wakers to be notified when this watchable is changed or dropped.
+    ///
+    /// We use a slotmap so we have a stable key we can store in the watcher for it to
+    /// remember which waker it previously inserted into the slot map.
+    /// We also store a u64 "reference count" of how many watchers have registered said
+    /// waker in the same task. This ensures we only remove the waker once the last
+    /// watcher from that task is dropped, while making sure that we don't register
+    /// wakers twice for the same task (saving memory).
+    wakers: Mutex<slotmap::DenseSlotMap<slotmap::DefaultKey, (Waker, u64)>>,
 }
 
 #[derive(Debug, Clone)]
@@ -839,7 +858,7 @@ impl<T: Clone> Shared<T> {
             }
         }
 
-        *waker_key = Some(self.add_waker(cx));
+        self.add_waker(cx, waker_key);
 
         #[cfg(watcher_loom)]
         loom::thread::yield_now();
@@ -861,25 +880,60 @@ impl<T: Clone> Shared<T> {
     /// The waker will be woken when the watchable is dropped completely
     /// or when the watcher is updated.
     ///
-    /// Returns the key used in the waker slotmap.
-    /// This can be used to remove the waker if a notification is not
-    /// needed anymore.
-    fn add_waker(&self, cx: &mut task::Context<'_>) -> slotmap::DefaultKey {
+    /// Will set `waker_key` to the key used in the waker slotmap.
+    /// `add_waker` needs to know the currently set waker key in order to
+    /// figure out whether it needs to increase the internal waker count
+    /// or not.
+    fn add_waker(&self, cx: &mut task::Context<'_>, waker_key: &mut Option<slotmap::DefaultKey>) {
         let mut wakers = self.wakers.lock().expect("poisoned");
-        for (key, waker) in wakers.iter() {
+        for (key, (waker, count)) in wakers.iter_mut() {
             if waker.will_wake(cx.waker()) {
-                return key;
+                if Some(key) != *waker_key {
+                    *count = count.saturating_add(1);
+                    if let Some(old_key) = waker_key.replace(key) {
+                        // This makes sure we clean up a potentially old waker we added previously.
+                        Self::dec_or_rem_waker(&mut wakers, old_key);
+                    }
+                }
+                return;
             }
         }
-        wakers.insert(cx.waker().clone())
+        // There can be technical reasons why runtimes have `will_wake` false negatives
+        // (e.g. tokio root block_on wakers being on different CGUs in release mode) which
+        // means we add a new waker every poll. This makes sure we clean up wakers from the
+        // last poll call, if still present.
+        if let Some(old_key) = waker_key.take() {
+            Self::dec_or_rem_waker(&mut wakers, old_key);
+        }
+        *waker_key = Some(wakers.insert((cx.waker().clone(), 1)));
     }
 }
 
 impl<T> Shared<T> {
     /// Removes and optionally returns the waker that was added via [`Self::add_waker`] before.
-    fn remove_waker(&self, waker_key: slotmap::DefaultKey) -> Option<Waker> {
+    fn remove_waker(&self, waker_key: slotmap::DefaultKey) {
         let mut wakers = self.wakers.lock().expect("poisoned");
-        wakers.remove(waker_key)
+        Self::dec_or_rem_waker(&mut wakers, waker_key);
+    }
+
+    /// Decrements the count of a waker entry, removing it when it reaches zero.
+    ///
+    /// Operates on an already-locked `wakers` guard to avoid re-entrant locking
+    /// from within [`Shared::add_waker`].
+    fn dec_or_rem_waker(
+        wakers: &mut slotmap::DenseSlotMap<slotmap::DefaultKey, (Waker, u64)>,
+        waker_key: slotmap::DefaultKey,
+    ) {
+        // We need to be careful to not use `remove` -> `insert` in favor of `get_mut`,
+        // because we care about the key the waker is stored under, as other watchers
+        // might still refer to the slot under that key.
+        if let Some((_, count)) = wakers.get_mut(waker_key) {
+            if *count <= 1 {
+                wakers.remove(waker_key);
+            } else {
+                *count -= 1;
+            }
+        }
     }
 }
 
@@ -1526,22 +1580,15 @@ mod tests {
             .unwrap()
     }
 
-    #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn regression_memleak() {
-        let process = procfs::process::Process::myself().unwrap();
-        let mem_baseline = process.statm().unwrap().resident;
-
-        const N: usize = 20000;
+    async fn regression_completed_tasks_clean_up_wakers() {
+        const N: usize = 100;
         let watchable = Watchable::new(0u64);
+
+        let mut tasks = JoinSet::new();
         for _ in 0..N {
             let mut w = watchable.watch();
-            tokio::spawn(async move {
-                // Stand-in for a real future's state.
-                // Pushes this future beyond the size that makes tokio
-                // store this future boxed.
-                let pad = [0u8; 3600];
-                std::hint::black_box(&pad);
+            tasks.spawn(async move {
                 // Register the `Direct` as a future in this tokio task by polling once,
                 // but then end the task without waiting for wake.
                 tokio::select! {
@@ -1549,22 +1596,103 @@ mod tests {
                     _ = w.updated() => {}
                     _ = std::future::ready(()) => {}
                 }
-                std::hint::black_box(&pad);
-            })
-            .await
-            .ok();
+            });
         }
+        tasks.join_all().await;
 
-        let mem_use_1 = process.statm().unwrap().resident - mem_baseline;
         // All N tasks completed and joined. The watchable should not store any wakers.
         // Calling `watchable.set(1)` would drain all wakers. In a previous version that
         // list was non-empty here and draining it would free memory.
-        // In the current version nothing should change.
-        watchable.set(1).unwrap();
-        let mem_use_2 = process.statm().unwrap().resident - mem_baseline;
-        assert_eq!(
-            mem_use_1, mem_use_2,
-            "watchable.set(1) shouldn't free memory"
-        )
+        assert_eq!(watchable.debug_waker_counts(), vec![]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn regression_same_task_drop_one_watcher_during_poll() {
+        struct SameTaskDropOneDirectDuringPoll {
+            watcher_1: Option<Direct<u64>>,
+            watcher_2: Direct<u64>,
+        }
+
+        impl Future for SameTaskDropOneDirectDuringPoll {
+            type Output = Result<(), Disconnected>;
+
+            fn poll(mut self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
+                // register a waker with both watchers
+                if let Some(watcher) = &mut self.watcher_1 {
+                    let _ = watcher.poll_updated(cx);
+                }
+                let res = self.watcher_2.poll_updated(cx);
+                self.watcher_1 = None; // drop watcher 1
+                res
+            }
+        }
+
+        let watcher = Watchable::new(0);
+        let weird = SameTaskDropOneDirectDuringPoll {
+            watcher_1: Some(watcher.watch()),
+            watcher_2: watcher.watch(),
+        };
+        let task = tokio::spawn(weird);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let _ = watcher.set(1);
+        tokio::time::timeout(Duration::from_millis(100), task)
+            .await
+            .unwrap() // no panic
+            .unwrap() // no timeout
+            .unwrap(); // no watcher disconnect
+    }
+
+    #[tokio::test]
+    async fn regression_waker_count_stuck_on_double_poll() {
+        let watchable = Watchable::new(0u64);
+        let mut watcher = watchable.watch();
+
+        // poll the watcher twice
+        tokio::select! {
+            biased;
+            _ = watcher.updated() => {}
+            _ = std::future::ready(()) => {}
+        }
+        tokio::select! {
+            biased;
+            _ = watcher.updated() => {}
+            _ = std::future::ready(()) => {}
+        }
+        drop(watcher);
+
+        assert_eq!(watchable.debug_waker_counts(), vec![]);
+    }
+
+    #[tokio::test]
+    async fn regression_waker_key_must_be_unchanged_on_remove() {
+        let watchable = Watchable::new(0u64);
+        let mut w1 = watchable.watch();
+        let mut w2 = watchable.watch();
+
+        // register both watchers' wakers
+        tokio::select! {
+            biased;
+            _ = w1.updated() => {}
+            _ = w2.updated() => {}
+            _ = std::future::ready(()) => {}
+        }
+        // we test the sum, because release and debug mode operate differently with tokio:
+        // In release mode, `will_wake` returns false negatives causing us to have [1, 1] waker counts,
+        // in debug mode, this doesn't happen, thus we're left with [2] as the waker counts.
+        // The reason for the difference is related to tokio waker vtables being split across CGUs.
+        assert_eq!(watchable.debug_waker_counts().iter().sum::<u64>(), 2);
+        drop(w2); // unregister one watcher
+        assert_eq!(watchable.debug_waker_counts().iter().sum::<u64>(), 1);
+        // This used to add another count to the waker as
+        // unregistering one watcher used to swap out the key
+        // used for said waker.
+        tokio::select! {
+            biased;
+            _ = w1.updated() => {}
+            _ = std::future::ready(()) => {}
+        }
+        assert_eq!(watchable.debug_waker_counts().iter().sum::<u64>(), 1);
+        drop(w1); // dropping the final waker should free the waker list
+        assert_eq!(watchable.debug_waker_counts(), vec![]);
     }
 }
