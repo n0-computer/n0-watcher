@@ -170,6 +170,55 @@ impl<T: Clone + Eq> Watchable<T> {
         ret
     }
 
+    /// Atomically modifies the value using a closure.
+    ///
+    /// The closure receives a mutable reference to the current value and may modify
+    /// it in place. The read-modify-write is performed under a write lock, so it
+    /// happens atomically with respect to other callers of [`Watchable::set`],
+    /// [`Watchable::modify`], [`Watchable::get`], and [`Watcher`]s. The closure
+    /// should therefore be fast and must not call back into this `Watchable`
+    /// (doing so will deadlock).
+    ///
+    /// Watchers are only notified if the value actually changed, as determined by
+    /// `Eq`. Whatever the closure returns is forwarded as the return value of this
+    /// method, which makes it convenient for expressing compare-and-swap:
+    ///
+    /// ```
+    /// # use n0_watcher::Watchable;
+    /// let watchable = Watchable::new(42);
+    ///
+    /// let swapped = watchable.modify(|value| {
+    ///     if *value == 42 {
+    ///         *value = 100;
+    ///         true
+    ///     } else {
+    ///         false
+    ///     }
+    /// });
+    /// assert!(swapped);
+    /// assert_eq!(watchable.get(), 100);
+    /// ```
+    pub fn modify<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&mut T) -> R,
+    {
+        let mut state = self.shared.state.write().expect("poisoned");
+        let old = state.value.clone();
+        let ret = f(&mut state.value);
+        let changed = old != state.value;
+        if changed {
+            state.epoch += 1;
+        }
+        drop(state);
+
+        if changed {
+            for watcher in self.shared.wakers.lock().expect("poisoned").drain(..) {
+                watcher.wake();
+            }
+        }
+        ret
+    }
+
     /// Creates a [`Direct`] [`Watcher`], allowing the value to be observed, but not modified.
     pub fn watch(&self) -> Direct<T> {
         Direct {
@@ -1546,6 +1595,52 @@ mod tests {
         assert_eq!(watcher_join.get(), vec![0, 1]);
         assert_eq!(watcher_join.peek(), &vec![0, 1]);
         assert!(!watcher_join.update());
+    }
+
+    #[tokio::test]
+    async fn test_modify_cas() {
+        let watchable = Watchable::new(0u32);
+        let mut watcher = watchable.watch();
+
+        // Successful CAS: mutates and signals change
+        let swapped = watchable.modify(|v| {
+            if *v == 0 {
+                *v = 1;
+                true
+            } else {
+                false
+            }
+        });
+        assert!(swapped);
+        assert_eq!(watchable.get(), 1);
+        assert_eq!(watcher.updated().await.unwrap(), 1);
+
+        // Failed CAS: closure leaves value untouched, no notification
+        let swapped = watchable.modify(|v| {
+            if *v == 0 {
+                *v = 2;
+                true
+            } else {
+                false
+            }
+        });
+        assert!(!swapped);
+        assert_eq!(watchable.get(), 1);
+        assert!(poll_once(&mut watcher.updated()).await.is_none());
+
+        // Closure "writes" but the value is equal: no notification
+        watchable.modify(|v| *v = 1);
+        assert_eq!(watchable.get(), 1);
+        assert!(poll_once(&mut watcher.updated()).await.is_none());
+
+        // Return value is forwarded
+        let prev = watchable.modify(|v| {
+            let prev = *v;
+            *v += 10;
+            prev
+        });
+        assert_eq!(prev, 1);
+        assert_eq!(watcher.updated().await.unwrap(), 11);
     }
 
     #[tokio::test]
