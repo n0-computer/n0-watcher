@@ -15,9 +15,15 @@ concurrency:
 env:
   IROH_FORCE_STAGING_RELAYS: "1"
 
+# Default to read-only. Jobs that need more grant it explicitly.
+permissions:
+  contents: read
+
 jobs:
   preview_docs:
-    permissions: write-all
+    permissions:
+      contents: write        # pushes to generated-docs-preview
+      pull-requests: write   # posts the preview comment
     timeout-minutes: 30
     name: Docs preview
     if: ${{ (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' ) && !github.event.pull_request.head.repo.fork }}
@@ -30,6 +36,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        persist-credentials: false
     - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
       with:
         toolchain: nightly-2025-10-09
