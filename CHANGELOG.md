@@ -1,6 +1,19 @@
 # Changelog
 
-## [1.0.0](https://github.com/n0-computer/n0-watcher/compare/v1.0.0-rc.0..1.0.0) - 2026-06-15
+## [1.0.1](https://github.com/n0-computer/n0-watcher/compare/v1.0.0..1.0.1) - 2026-10-20
+
+### 🐛 Bug Fixes
+
+- Remove wakers when dropping `Direct` ([#63](https://github.com/n0-computer/n0-watcher/issues/63)) - ([5b30620](https://github.com/n0-computer/n0-watcher/commit/5b30620ecb6d2e598c9569da28fca15cc6f63e37))
+- Count the number of wakers active in the same task ([#64](https://github.com/n0-computer/n0-watcher/issues/64)) - ([3b8cd02](https://github.com/n0-computer/n0-watcher/commit/3b8cd02b29343f901ab3dba9c49c55480c5c9c31))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(secruity)* Hardening + lock files + dependabot cooldown ([#75](https://github.com/n0-computer/n0-watcher/issues/75)) - ([64a979d](https://github.com/n0-computer/n0-watcher/commit/64a979de57c6be5f168764540169e00bdcffa4a8))
+- Run scheduled CI jobs earlier ([#67](https://github.com/n0-computer/n0-watcher/issues/67)) - ([e30e852](https://github.com/n0-computer/n0-watcher/commit/e30e8525b575c91647f71f36f862e0f8784787c3))
+- Add AI policy ([#74](https://github.com/n0-computer/n0-watcher/issues/74)) - ([2fbdbf3](https://github.com/n0-computer/n0-watcher/commit/2fbdbf3222a531606f6fe78b24febb27a19e9d2a))
+
+## [1.0.0](https://github.com/n0-computer/n0-watcher/compare/v1.0.0-rc.0..v1.0.0) - 2026-06-15
 
 ### ⛰️  Features
 
