@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["Direct","Disconnected","InitializedFut","Join","Map","NextFut","Stream","Triple","Tuple","Watchable"],"trait":["Nullable","Watcher"]};
